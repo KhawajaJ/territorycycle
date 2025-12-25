@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react'
-import { MapPin, Play, Pause, Square, Trophy, Shield, Bell, User, Target, Clock, TrendingUp, Award, LogOut, Mail, AlertCircle, Loader2, CheckCircle, X, Navigation } from 'lucide-react'
+import { MapPin, Play, Pause, Square, Trophy, Shield, Bell, User, Target, Clock, TrendingUp, Award, LogOut, Mail, AlertCircle, Loader2, CheckCircle, X, Navigation, Camera, Save } from 'lucide-react'
 import { supabase, signInWithGoogle, signInWithEmail, signUpWithEmail, signOut, saveRide, getUserRides, upsertRouteUnlock, getUserTiles, claimTiles, getLeaderboard, getActiveThreats } from './supabase'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
@@ -88,6 +88,7 @@ function ToastContainer({ toasts, removeToast }) {
 // Main App
 export default function App() {
   const [user, setUser] = useState(null)
+  const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const [currentPage, setCurrentPage] = useState('onboarding')
   const [toasts, setToasts] = useState([])
@@ -111,24 +112,55 @@ export default function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null)
       if (session?.user) {
-        setCurrentPage('home')
+        loadUserProfile(session.user.id)
         loadUserData(session.user.id)
+      } else {
+        setLoading(false)
       }
-      setLoading(false)
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null)
       if (session?.user) {
-        setCurrentPage('home')
+        loadUserProfile(session.user.id)
         loadUserData(session.user.id)
       } else {
         setCurrentPage('onboarding')
+        setProfile(null)
+        setLoading(false)
       }
     })
 
     return () => subscription.unsubscribe()
   }, [])
+
+  const loadUserProfile = async (userId) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single()
+      
+      if (data) {
+        setProfile(data)
+        // Check if profile is complete
+        if (!data.first_name || !data.last_name) {
+          setCurrentPage('profileSetup')
+        } else {
+          setCurrentPage('home')
+        }
+      } else {
+        // Profile doesn't exist yet, go to setup
+        setCurrentPage('profileSetup')
+      }
+    } catch (err) {
+      console.error('Error loading profile:', err)
+      setCurrentPage('profileSetup')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const loadUserData = async (userId) => {
     try {
@@ -148,6 +180,7 @@ export default function App() {
   const handleSignOut = async () => {
     await signOut()
     setUser(null)
+    setProfile(null)
     setRides([])
     setTiles([])
     setCurrentPage('onboarding')
@@ -156,6 +189,8 @@ export default function App() {
 
   const contextValue = {
     user,
+    profile,
+    setProfile,
     rides,
     setRides,
     tiles,
@@ -189,10 +224,208 @@ export default function App() {
       <div className="min-h-screen bg-slate-900">
         {currentPage === 'onboarding' && <OnboardingScreen />}
         {currentPage === 'auth' && <AuthScreen />}
-        {user && !['onboarding', 'auth'].includes(currentPage) && <MainApp />}
+        {currentPage === 'profileSetup' && user && <ProfileSetupScreen />}
+        {user && profile && !['onboarding', 'auth', 'profileSetup'].includes(currentPage) && <MainApp />}
         <ToastContainer toasts={toasts} removeToast={removeToast} />
       </div>
     </AppContext.Provider>
+  )
+}
+
+// Profile Setup Screen
+function ProfileSetupScreen() {
+  const { user, setProfile, setCurrentPage, addToast } = useApp()
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
+  const [photoUrl, setPhotoUrl] = useState(null)
+  const [photoFile, setPhotoFile] = useState(null)
+  const [loading, setSaving] = useState(false)
+  const fileInputRef = useRef(null)
+
+  // Load existing profile data if any
+  useEffect(() => {
+    const loadExisting = async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single()
+      
+      if (data) {
+        setFirstName(data.first_name || '')
+        setLastName(data.last_name || '')
+        setPhotoUrl(data.avatar_url || null)
+      }
+    }
+    loadExisting()
+  }, [user.id])
+
+  const handlePhotoSelect = (e) => {
+    const file = e.target.files[0]
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        addToast('Photo must be less than 5MB', 'error')
+        return
+      }
+      setPhotoFile(file)
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        setPhotoUrl(reader.result)
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const handleSave = async () => {
+    if (!firstName.trim() || !lastName.trim()) {
+      addToast('Please enter your first and last name', 'error')
+      return
+    }
+
+    setSaving(true)
+
+    try {
+      let avatarUrl = photoUrl
+
+      // Upload photo if selected
+      if (photoFile) {
+        const fileExt = photoFile.name.split('.').pop()
+        const fileName = `${user.id}-${Date.now()}.${fileExt}`
+        const filePath = `avatars/${fileName}`
+
+        const { error: uploadError } = await supabase.storage
+          .from('avatars')
+          .upload(filePath, photoFile)
+
+        if (uploadError) {
+          console.error('Upload error:', uploadError)
+          // Continue without photo if upload fails
+        } else {
+          const { data: { publicUrl } } = supabase.storage
+            .from('avatars')
+            .getPublicUrl(filePath)
+          avatarUrl = publicUrl
+        }
+      }
+
+      // Update profile
+      const { data, error } = await supabase
+        .from('profiles')
+        .upsert({
+          id: user.id,
+          email: user.email,
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
+          name: `${firstName.trim()} ${lastName.trim()}`,
+          avatar_url: avatarUrl,
+          updated_at: new Date().toISOString()
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+
+      setProfile(data)
+      addToast('Profile saved!', 'success')
+      setCurrentPage('home')
+    } catch (err) {
+      console.error('Error saving profile:', err)
+      addToast('Failed to save profile', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-cyan-900 text-white flex flex-col safe-area-inset-top safe-area-inset-bottom">
+      <div className="flex-1 flex flex-col justify-center px-6 py-8">
+        <div className="space-y-8 animate-fade-in">
+          <div className="text-center space-y-2">
+            <h1 className="text-3xl font-bold">Complete Your Profile</h1>
+            <p className="text-slate-400">Let other riders know who you are</p>
+          </div>
+
+          {/* Photo Upload */}
+          <div className="flex justify-center">
+            <div 
+              onClick={() => fileInputRef.current?.click()}
+              className="relative cursor-pointer group"
+            >
+              <div className="w-32 h-32 rounded-full bg-slate-700 border-4 border-slate-600 overflow-hidden flex items-center justify-center group-hover:border-cyan-500 transition-colors">
+                {photoUrl ? (
+                  <img src={photoUrl} alt="Profile" className="w-full h-full object-cover" />
+                ) : (
+                  <User className="w-16 h-16 text-slate-500" />
+                )}
+              </div>
+              <div className="absolute bottom-0 right-0 w-10 h-10 bg-cyan-500 rounded-full flex items-center justify-center border-4 border-slate-800 group-hover:bg-cyan-400 transition-colors">
+                <Camera className="w-5 h-5 text-white" />
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handlePhotoSelect}
+                className="hidden"
+              />
+            </div>
+          </div>
+          <p className="text-center text-sm text-slate-500">Tap to add a photo (optional)</p>
+
+          {/* Form Fields */}
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-400 mb-2">First Name *</label>
+              <input
+                type="text"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                placeholder="Enter your first name"
+                className="w-full px-4 py-3 rounded-xl bg-slate-800 text-white placeholder-slate-500 border border-slate-600 focus:border-cyan-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-400 mb-2">Last Name *</label>
+              <input
+                type="text"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                placeholder="Enter your last name"
+                className="w-full px-4 py-3 rounded-xl bg-slate-800 text-white placeholder-slate-500 border border-slate-600 focus:border-cyan-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-400 mb-2">Email</label>
+              <input
+                type="email"
+                value={user?.email || ''}
+                disabled
+                className="w-full px-4 py-3 rounded-xl bg-slate-800/50 text-slate-400 border border-slate-700 cursor-not-allowed"
+              />
+              <p className="text-xs text-slate-500 mt-1">Email cannot be changed</p>
+            </div>
+          </div>
+
+          {/* Save Button */}
+          <button
+            onClick={handleSave}
+            disabled={loading}
+            className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-bold py-4 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {loading ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <>
+                <Save className="w-5 h-5" />
+                Save Profile
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -368,15 +601,16 @@ function MainApp() {
         {currentPage === 'territory' && <TerritoryMapPage />}
         {currentPage === 'leaderboard' && <LeaderboardPage />}
         {currentPage === 'profile' && <ProfilePage />}
+        {currentPage === 'editProfile' && <EditProfilePage />}
       </div>
-      {!['ride', 'rideSummary'].includes(currentPage) && <BottomNav />}
+      {!['ride', 'rideSummary', 'editProfile'].includes(currentPage) && <BottomNav />}
     </div>
   )
 }
 
 // Home Page
 function HomePage() {
-  const { user, rides, tiles, threats, setCurrentPage } = useApp()
+  const { user, profile, rides, tiles, threats, setCurrentPage } = useApp()
 
   const weeklyStats = React.useMemo(() => {
     const now = Date.now()
@@ -391,7 +625,10 @@ function HomePage() {
   return (
     <div className="p-4 space-y-4 pb-24 safe-area-inset-top">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-white">TerritoryCycle</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-white">TerritoryCycle</h1>
+          <p className="text-sm text-slate-400">Welcome, {profile?.first_name || 'Rider'}!</p>
+        </div>
         <div className="relative">
           <Bell className="w-6 h-6 text-slate-400" />
           {threats.length > 0 && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-xs text-white flex items-center justify-center">{threats.length}</span>}
@@ -863,7 +1100,7 @@ function LeaderboardPage() {
 
 // Profile Page
 function ProfilePage() {
-  const { user, rides, tiles, handleSignOut } = useApp()
+  const { user, profile, rides, tiles, handleSignOut, setCurrentPage } = useApp()
 
   const totalDistance = rides.reduce((sum, r) => sum + (r.distance_m || 0), 0)
   const totalTime = rides.reduce((sum, r) => sum + (r.duration_sec || 0), 0)
@@ -872,13 +1109,27 @@ function ProfilePage() {
     <div className="min-h-screen bg-slate-900 pb-24">
       <div className="bg-gradient-to-r from-cyan-600 to-purple-600 p-6 safe-area-inset-top">
         <div className="flex items-center gap-4 mb-6">
-          <div className="w-16 h-16 bg-white/20 backdrop-blur rounded-full flex items-center justify-center">
-            <User className="w-10 h-10 text-white" />
+          <div className="w-20 h-20 bg-white/20 backdrop-blur rounded-full overflow-hidden flex items-center justify-center">
+            {profile?.avatar_url ? (
+              <img src={profile.avatar_url} alt="Profile" className="w-full h-full object-cover" />
+            ) : (
+              <User className="w-10 h-10 text-white" />
+            )}
           </div>
-          <div>
-            <h1 className="text-xl font-bold text-white">{user?.email?.split('@')[0] || 'Rider'}</h1>
+          <div className="flex-1">
+            <h1 className="text-xl font-bold text-white">
+              {profile?.first_name && profile?.last_name 
+                ? `${profile.first_name} ${profile.last_name}`
+                : profile?.name || 'Rider'}
+            </h1>
             <div className="text-sm text-cyan-100">{user?.email}</div>
           </div>
+          <button 
+            onClick={() => setCurrentPage('editProfile')}
+            className="p-2 bg-white/20 rounded-lg hover:bg-white/30 transition-colors"
+          >
+            <Camera className="w-5 h-5 text-white" />
+          </button>
         </div>
 
         <div className="grid grid-cols-3 gap-4 bg-white/10 backdrop-blur rounded-xl p-4">
@@ -910,8 +1161,145 @@ function ProfilePage() {
           )}
         </div>
 
+        <button 
+          onClick={() => setCurrentPage('editProfile')} 
+          className="w-full bg-slate-800 hover:bg-slate-700 text-white font-semibold py-4 rounded-xl flex items-center justify-center gap-2 border border-slate-600"
+        >
+          <User className="w-5 h-5" />Edit Profile
+        </button>
+
         <button onClick={handleSignOut} className="w-full bg-red-600/20 hover:bg-red-600/30 text-red-400 font-semibold py-4 rounded-xl flex items-center justify-center gap-2 border border-red-600/30">
           <LogOut className="w-5 h-5" />Sign Out
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// Edit Profile Page
+function EditProfilePage() {
+  const { user, profile, setProfile, setCurrentPage, addToast } = useApp()
+  const [firstName, setFirstName] = useState(profile?.first_name || '')
+  const [lastName, setLastName] = useState(profile?.last_name || '')
+  const [photoUrl, setPhotoUrl] = useState(profile?.avatar_url || null)
+  const [photoFile, setPhotoFile] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const fileInputRef = useRef(null)
+
+  const handlePhotoSelect = (e) => {
+    const file = e.target.files[0]
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        addToast('Photo must be less than 5MB', 'error')
+        return
+      }
+      setPhotoFile(file)
+      const reader = new FileReader()
+      reader.onloadend = () => setPhotoUrl(reader.result)
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const handleSave = async () => {
+    if (!firstName.trim() || !lastName.trim()) {
+      addToast('Please enter your first and last name', 'error')
+      return
+    }
+
+    setSaving(true)
+
+    try {
+      let avatarUrl = photoUrl
+
+      if (photoFile) {
+        const fileExt = photoFile.name.split('.').pop()
+        const fileName = `${user.id}-${Date.now()}.${fileExt}`
+        const filePath = `avatars/${fileName}`
+
+        const { error: uploadError } = await supabase.storage
+          .from('avatars')
+          .upload(filePath, photoFile)
+
+        if (!uploadError) {
+          const { data: { publicUrl } } = supabase.storage
+            .from('avatars')
+            .getPublicUrl(filePath)
+          avatarUrl = publicUrl
+        }
+      }
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .upsert({
+          id: user.id,
+          email: user.email,
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
+          name: `${firstName.trim()} ${lastName.trim()}`,
+          avatar_url: avatarUrl,
+          updated_at: new Date().toISOString()
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+
+      setProfile(data)
+      addToast('Profile updated!', 'success')
+      setCurrentPage('profile')
+    } catch (err) {
+      console.error('Error saving profile:', err)
+      addToast('Failed to save profile', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-900 safe-area-inset-top safe-area-inset-bottom">
+      <div className="bg-slate-800 p-4 border-b border-slate-700 flex items-center gap-4">
+        <button onClick={() => setCurrentPage('profile')} className="text-slate-400 hover:text-white">
+          <X className="w-6 h-6" />
+        </button>
+        <h1 className="text-xl font-bold text-white flex-1">Edit Profile</h1>
+      </div>
+
+      <div className="p-6 space-y-6">
+        {/* Photo */}
+        <div className="flex justify-center">
+          <div onClick={() => fileInputRef.current?.click()} className="relative cursor-pointer group">
+            <div className="w-32 h-32 rounded-full bg-slate-700 border-4 border-slate-600 overflow-hidden flex items-center justify-center group-hover:border-cyan-500 transition-colors">
+              {photoUrl ? (
+                <img src={photoUrl} alt="Profile" className="w-full h-full object-cover" />
+              ) : (
+                <User className="w-16 h-16 text-slate-500" />
+              )}
+            </div>
+            <div className="absolute bottom-0 right-0 w-10 h-10 bg-cyan-500 rounded-full flex items-center justify-center border-4 border-slate-900">
+              <Camera className="w-5 h-5 text-white" />
+            </div>
+            <input ref={fileInputRef} type="file" accept="image/*" onChange={handlePhotoSelect} className="hidden" />
+          </div>
+        </div>
+
+        {/* Form */}
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-400 mb-2">First Name</label>
+            <input type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-slate-800 text-white border border-slate-600 focus:border-cyan-500 focus:outline-none" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-400 mb-2">Last Name</label>
+            <input type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} className="w-full px-4 py-3 rounded-xl bg-slate-800 text-white border border-slate-600 focus:border-cyan-500 focus:outline-none" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-400 mb-2">Email</label>
+            <input type="email" value={user?.email || ''} disabled className="w-full px-4 py-3 rounded-xl bg-slate-800/50 text-slate-500 border border-slate-700 cursor-not-allowed" />
+          </div>
+        </div>
+
+        <button onClick={handleSave} disabled={saving} className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-bold py-4 rounded-xl disabled:opacity-50 flex items-center justify-center gap-2">
+          {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Save className="w-5 h-5" />Save Changes</>}
         </button>
       </div>
     </div>
