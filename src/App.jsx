@@ -382,6 +382,8 @@ function ProfileSetupScreen() {
   const [avatar, setAvatar] = useState({ background: AVATAR_OPTIONS.backgrounds[0], icon: AVATAR_OPTIONS.icons[0], photo_url: null })
   const [photoFile, setPhotoFile] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [customEmoji, setCustomEmoji] = useState('')
+  const [showCustomInput, setShowCustomInput] = useState(false)
   const fileRef = useRef(null)
 
   const handlePhoto = (e) => {
@@ -392,6 +394,19 @@ function ProfileSetupScreen() {
       const reader = new FileReader()
       reader.onloadend = () => setAvatar(a => ({ ...a, photo_url: reader.result }))
       reader.readAsDataURL(file)
+    }
+  }
+
+  const handleCustomEmoji = (value) => {
+    // Extract only emoji characters
+    const emojiRegex = /\p{Emoji}/u
+    const chars = [...value]
+    const emoji = chars.find(char => emojiRegex.test(char))
+    if (emoji) {
+      setCustomEmoji(emoji)
+      setAvatar(a => ({ ...a, icon: emoji }))
+    } else if (value === '') {
+      setCustomEmoji('')
     }
   }
 
@@ -417,8 +432,8 @@ function ProfileSetupScreen() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-cyan-900 text-white flex flex-col">
-      <div className="flex-1 overflow-auto px-6 py-8">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-cyan-900 text-white flex flex-col" style={{ paddingBottom: 'env(safe-area-inset-bottom, 20px)' }}>
+      <div className="flex-1 overflow-auto px-6 pt-12 pb-4">
         <div className="space-y-6 animate-fade-in">
           {step === 1 && (
             <>
@@ -443,7 +458,44 @@ function ProfileSetupScreen() {
               {!avatar.photo_url && (
                 <>
                   <div><label className="block text-sm text-slate-400 mb-2">Background</label><div className="flex flex-wrap gap-2">{AVATAR_OPTIONS.backgrounds.map(bg => <button key={bg} onClick={() => setAvatar(a => ({ ...a, background: bg }))} className={`w-10 h-10 rounded-full ${avatar.background === bg ? 'ring-2 ring-white ring-offset-2 ring-offset-slate-900 scale-110' : ''}`} style={{ backgroundColor: bg }} />)}</div></div>
-                  <div><label className="block text-sm text-slate-400 mb-2">Icon</label><div className="flex flex-wrap gap-2">{AVATAR_OPTIONS.icons.map(ic => <button key={ic} onClick={() => setAvatar(a => ({ ...a, icon: ic }))} className={`w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center text-xl ${avatar.icon === ic ? 'ring-2 ring-cyan-400 scale-110' : ''}`}>{ic}</button>)}</div></div>
+                  <div>
+                    <label className="block text-sm text-slate-400 mb-2">Icon</label>
+                    <div className="flex flex-wrap gap-2">
+                      {AVATAR_OPTIONS.icons.map(ic => (
+                        <button 
+                          key={ic} 
+                          onClick={() => { setAvatar(a => ({ ...a, icon: ic })); setCustomEmoji(''); setShowCustomInput(false); }} 
+                          className={`w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center text-xl transition-all ${avatar.icon === ic && !customEmoji ? 'ring-2 ring-cyan-400 scale-110' : ''}`}
+                        >
+                          {ic}
+                        </button>
+                      ))}
+                      {/* Custom emoji button */}
+                      <button 
+                        onClick={() => setShowCustomInput(!showCustomInput)} 
+                        className={`w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center text-xl transition-all border-2 border-dashed ${showCustomInput || customEmoji ? 'border-cyan-400 ring-2 ring-cyan-400' : 'border-slate-600'}`}
+                      >
+                        {customEmoji || '+'}
+                      </button>
+                    </div>
+                    
+                    {/* Custom emoji input */}
+                    {showCustomInput && (
+                      <div className="mt-3 animate-fade-in">
+                        <div className="flex gap-2">
+                          <input 
+                            type="text" 
+                            value={customEmoji} 
+                            onChange={e => handleCustomEmoji(e.target.value)}
+                            placeholder="Type or paste emoji..."
+                            className="flex-1 px-4 py-3 rounded-xl bg-slate-800 text-white text-center text-2xl border border-slate-600 focus:border-cyan-500 focus:outline-none"
+                            maxLength={2}
+                          />
+                        </div>
+                        <p className="text-xs text-slate-500 mt-2 text-center">Type any emoji or use your keyboard's emoji picker</p>
+                      </div>
+                    )}
+                  </div>
                 </>
               )}
             </>
@@ -451,9 +503,29 @@ function ProfileSetupScreen() {
           <div className="flex justify-center gap-2 pt-4"><div className={`h-2 w-8 rounded-full ${step === 1 ? 'bg-cyan-400' : 'bg-slate-700'}`} /><div className={`h-2 w-8 rounded-full ${step === 2 ? 'bg-cyan-400' : 'bg-slate-700'}`} /></div>
         </div>
       </div>
-      <div className="p-6 space-y-3">
-        {step === 1 ? <button onClick={() => setStep(2)} disabled={!firstName.trim() || !lastName.trim()} className="w-full bg-cyan-500 text-slate-900 font-bold py-4 rounded-xl disabled:opacity-50">Next: Create Avatar</button> :
-        <><button onClick={handleSave} disabled={loading} className="w-full bg-cyan-500 text-slate-900 font-bold py-4 rounded-xl disabled:opacity-50 flex items-center justify-center gap-2">{loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Save className="w-5 h-5" />Save & Continue</>}</button><button onClick={() => setStep(1)} className="w-full text-slate-400 py-2">Back</button></>}
+      
+      {/* Fixed bottom button area */}
+      <div className="sticky bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-slate-900 via-slate-900 to-transparent pt-8">
+        {step === 1 ? (
+          <button 
+            onClick={() => setStep(2)} 
+            disabled={!firstName.trim() || !lastName.trim()} 
+            className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-bold py-4 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Next: Create Avatar
+          </button>
+        ) : (
+          <div className="space-y-3">
+            <button 
+              onClick={handleSave} 
+              disabled={loading} 
+              className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-900 font-bold py-4 rounded-xl disabled:opacity-50 flex items-center justify-center gap-2 transition-colors"
+            >
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Save className="w-5 h-5" />Save & Continue</>}
+            </button>
+            <button onClick={() => setStep(1)} className="w-full text-slate-400 hover:text-white py-2 transition-colors">Back</button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -835,36 +907,145 @@ function TerritoryMapPage() {
 }
 
 function LeaderboardPage() {
-  const { user } = useApp()
+  const { user, profile } = useApp()
   const [leaders, setLeaders] = useState([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('riders')
+  const [scope, setScope] = useState('global')
+  const [userLocation, setUserLocation] = useState({ city: null, country: null })
+
+  // Get user's location on mount
+  useEffect(() => {
+    const getLocation = async () => {
+      // Try to get from profile first
+      if (profile?.city && profile?.country) {
+        setUserLocation({ city: profile.city, country: profile.country })
+        return
+      }
+      
+      // Otherwise try to detect via reverse geocoding
+      try {
+        const pos = await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 })
+        })
+        
+        // Use Mapbox reverse geocoding
+        const response = await fetch(
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${pos.coords.longitude},${pos.coords.latitude}.json?types=place,country&access_token=${mapboxgl.accessToken}`
+        )
+        const data = await response.json()
+        
+        if (data.features) {
+          const city = data.features.find(f => f.place_type.includes('place'))?.text || null
+          const country = data.features.find(f => f.place_type.includes('country'))?.text || null
+          setUserLocation({ city, country })
+          
+          // Save to profile if we have a user
+          if (user && (city || country)) {
+            await supabase.from('profiles').update({ city, country }).eq('id', user.id)
+          }
+        }
+      } catch (err) {
+        console.log('Could not detect location')
+      }
+    }
+    getLocation()
+  }, [user, profile])
 
   useEffect(() => {
     const load = async () => {
-      const { data } = await supabase.from(tab === 'riders' ? 'leaderboard' : 'clan_leaderboard').select('*').limit(50)
-      setLeaders(data || []); setLoading(false)
+      setLoading(true)
+      let query = supabase.from(tab === 'riders' ? 'leaderboard' : 'clan_leaderboard').select('*')
+      
+      // Filter by scope if not global
+      if (tab === 'riders') {
+        if (scope === 'city' && userLocation.city) {
+          query = query.eq('city', userLocation.city)
+        } else if (scope === 'country' && userLocation.country) {
+          query = query.eq('country', userLocation.country)
+        }
+      }
+      
+      const { data } = await query.limit(50)
+      setLeaders(data || [])
+      setLoading(false)
     }
     load()
-  }, [tab])
+  }, [tab, scope, userLocation])
+
+  const scopeLabels = {
+    city: userLocation.city || 'City',
+    country: userLocation.country || 'Country',
+    global: 'Global'
+  }
 
   return (
     <div className="min-h-screen bg-slate-900 pb-24">
       <div className="bg-gradient-to-r from-amber-600 to-orange-600 p-6 safe-area-inset-top">
         <div className="flex items-center gap-3 mb-4"><Trophy className="w-8 h-8 text-white" /><h1 className="text-2xl font-bold text-white">Leaderboard</h1></div>
-        <div className="flex gap-2">
-          <button onClick={() => setTab('riders')} className={`flex-1 py-2 rounded-lg font-medium ${tab === 'riders' ? 'bg-white/20 text-white' : 'text-white/60'}`}>Riders</button>
-          <button onClick={() => setTab('clans')} className={`flex-1 py-2 rounded-lg font-medium ${tab === 'clans' ? 'bg-white/20 text-white' : 'text-white/60'}`}>Clans</button>
+        
+        {/* Riders / Clans Toggle */}
+        <div className="flex gap-2 mb-3">
+          <button onClick={() => setTab('riders')} className={`flex-1 py-2 rounded-lg font-medium transition-colors ${tab === 'riders' ? 'bg-white/20 text-white' : 'text-white/60'}`}>Riders</button>
+          <button onClick={() => setTab('clans')} className={`flex-1 py-2 rounded-lg font-medium transition-colors ${tab === 'clans' ? 'bg-white/20 text-white' : 'text-white/60'}`}>Clans</button>
         </div>
+        
+        {/* Scope Toggle - Only show for riders */}
+        {tab === 'riders' && (
+          <div className="flex gap-1 bg-black/20 p-1 rounded-lg">
+            <button 
+              onClick={() => setScope('city')} 
+              disabled={!userLocation.city}
+              className={`flex-1 py-1.5 px-2 rounded-md text-sm font-medium transition-colors ${scope === 'city' ? 'bg-white/20 text-white' : 'text-white/60'} ${!userLocation.city ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              🏙️ {userLocation.city || 'City'}
+            </button>
+            <button 
+              onClick={() => setScope('country')} 
+              disabled={!userLocation.country}
+              className={`flex-1 py-1.5 px-2 rounded-md text-sm font-medium transition-colors ${scope === 'country' ? 'bg-white/20 text-white' : 'text-white/60'} ${!userLocation.country ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              🌍 {userLocation.country || 'Country'}
+            </button>
+            <button 
+              onClick={() => setScope('global')} 
+              className={`flex-1 py-1.5 px-2 rounded-md text-sm font-medium transition-colors ${scope === 'global' ? 'bg-white/20 text-white' : 'text-white/60'}`}
+            >
+              🌐 Global
+            </button>
+          </div>
+        )}
       </div>
+      
       <div className="p-4 space-y-2">
+        {/* Location detection hint */}
+        {tab === 'riders' && !userLocation.city && !userLocation.country && (
+          <div className="bg-slate-800 rounded-xl p-3 mb-2 flex items-center gap-2 border border-slate-700">
+            <MapPin className="w-5 h-5 text-slate-400" />
+            <p className="text-sm text-slate-400">Enable location to see local rankings</p>
+          </div>
+        )}
+        
         {loading ? <div className="text-center py-12"><Loader2 className="w-8 h-8 animate-spin mx-auto text-slate-500" /></div> :
-        leaders.length === 0 ? <div className="text-center py-16"><Trophy className="w-16 h-16 mx-auto mb-4 text-slate-600" /><p className="text-slate-500">No entries yet</p></div> :
+        leaders.length === 0 ? (
+          <div className="text-center py-16">
+            <Trophy className="w-16 h-16 mx-auto mb-4 text-slate-600" />
+            <p className="text-slate-500">
+              {scope === 'city' ? `No riders in ${userLocation.city} yet` :
+               scope === 'country' ? `No riders in ${userLocation.country} yet` :
+               'No entries yet'}
+            </p>
+            {scope !== 'global' && <button onClick={() => setScope('global')} className="mt-2 text-cyan-400 text-sm">View Global Rankings →</button>}
+          </div>
+        ) :
         leaders.map((e, i) => (
           <div key={e.user_id || e.id} className={`bg-slate-800 rounded-xl p-4 flex items-center gap-4 border ${e.user_id === user?.id ? 'border-cyan-500 bg-cyan-500/10' : 'border-slate-700'}`}>
             <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${i === 0 ? 'bg-amber-500 text-white' : i === 1 ? 'bg-slate-400 text-white' : i === 2 ? 'bg-orange-700 text-white' : 'bg-slate-700 text-slate-400'}`}>{i === 0 ? '👑' : i + 1}</div>
             <div className="flex-1">
-              <div className="font-semibold text-white">{tab === 'riders' ? (e.first_name ? `${e.first_name} ${e.last_name}` : e.name || 'Anonymous') : e.name}{e.user_id === user?.id && <span className="ml-2 text-xs text-cyan-400">(You)</span>}</div>
+              <div className="font-semibold text-white">
+                {tab === 'riders' ? (e.first_name ? `${e.first_name} ${e.last_name}` : e.name || 'Anonymous') : e.name}
+                {e.user_id === user?.id && <span className="ml-2 text-xs text-cyan-400">(You)</span>}
+              </div>
               <div className="text-sm text-slate-500">{e.tiles_owned ?? e.total_tiles ?? 0} tiles</div>
             </div>
             {i < 3 && <div className="text-2xl">{['🥇', '🥈', '🥉'][i]}</div>}
