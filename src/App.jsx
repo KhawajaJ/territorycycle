@@ -175,6 +175,7 @@ export default function App() {
   const [selectedActivity, setSelectedActivity] = useState(null)
   const [weather, setWeather] = useState(null)
   const [suggestedRoutes, setSuggestedRoutes] = useState([])
+  const [showTutorial, setShowTutorial] = useState(false)
 
   const addToast = useCallback((message, type = 'info') => setToasts(p => [...p, { id: Date.now(), message, type }]), [])
   const removeToast = useCallback((id) => setToasts(p => p.filter(t => t.id !== id)), [])
@@ -301,7 +302,8 @@ export default function App() {
     user, profile, setProfile, rides, setRides, tiles, setTiles, routeUnlocks, threats,
     currentPage, setCurrentPage, addToast, lastRide, setLastRide, handleSignOut, loadData,
     triggerConfetti, clan, setClan, loadClan, achievements, streak, calcStreak, addXp,
-    selectedActivity, setSelectedActivity, weather, suggestedRoutes, activity
+    selectedActivity, setSelectedActivity, weather, suggestedRoutes, activity,
+    showTutorial, setShowTutorial
   }
 
   if (loading) return (
@@ -323,6 +325,7 @@ export default function App() {
         {user && profile && selectedActivity && !['onboarding','auth','activitySelect','profileSetup'].includes(currentPage) && <MainApp />}
         <ToastContainer toasts={toasts} removeToast={removeToast} />
         <Confetti active={showConfetti} />
+        {showTutorial && <TutorialOverlay />}
       </div>
       <style>{`
         @keyframes slide-up { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
@@ -335,6 +338,52 @@ export default function App() {
         .animate-float { animation: float 3s ease-in-out infinite; }
       `}</style>
     </AppContext.Provider>
+  )
+}
+
+// ============== TUTORIAL OVERLAY ==============
+function TutorialOverlay() {
+  const { setShowTutorial, selectedActivity, activity } = useApp()
+  const [step, setStep] = useState(1)
+  
+  const steps = [
+    { icon: <MapPin className="w-16 h-16" style={{ color: activity?.color }} />, title: 'Welcome to TerritoryTrack!', desc: `Claim territory while ${activity?.name.toLowerCase()}. The more you move, the more you own.` },
+    { icon: <Navigation className="w-16 h-16 text-emerald-400" />, title: 'Track Your Activity', desc: `Tap 'Start ${activity?.name}' to begin tracking your route with GPS.` },
+    { icon: <Target className="w-16 h-16 text-purple-400" />, title: 'Unlock Routes', desc: 'Complete the same route 3 times in 7 days to unlock it and claim tiles.' },
+    { icon: <Route className="w-16 h-16 text-amber-400" />, title: 'Smart Routes', desc: 'Get personalized route suggestions based on weather and your progress!' },
+    { icon: <Trophy className="w-16 h-16 text-yellow-400" />, title: 'Ready to Go!', desc: 'Earn XP, unlock achievements, and dominate the leaderboard!' }
+  ]
+  const s = steps[step - 1]
+  
+  const close = () => setShowTutorial(false)
+  
+  return (
+    <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+      <div className="max-w-sm w-full animate-fade-in" key={step}>
+        <div className="text-center space-y-6">
+          <div className="w-32 h-32 bg-slate-800/50 rounded-3xl flex items-center justify-center mx-auto border border-slate-700 animate-float">{s.icon}</div>
+          <div className="space-y-3">
+            <h2 className="text-2xl font-bold text-white">{s.title}</h2>
+            <p className="text-slate-300">{s.desc}</p>
+          </div>
+          <div className="flex justify-center gap-2">
+            {steps.map((_, i) => (
+              <div key={i} className={`h-2 rounded-full transition-all ${i + 1 === step ? 'w-8' : 'w-2 bg-slate-700'}`} style={i + 1 === step ? { backgroundColor: activity?.color } : {}} />
+            ))}
+          </div>
+          <div className="space-y-3 pt-4">
+            {step < steps.length ? (
+              <>
+                <button onClick={() => setStep(step + 1)} className={`w-full bg-gradient-to-r ${activity?.gradient} text-white font-bold py-4 rounded-xl`}>Next</button>
+                <button onClick={close} className="w-full text-slate-500 hover:text-slate-300 py-2">Skip</button>
+              </>
+            ) : (
+              <button onClick={close} className={`w-full bg-gradient-to-r ${activity?.gradient} text-white font-bold py-4 rounded-xl`}>{activity?.emoji} Let's Go!</button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -501,27 +550,35 @@ function ActivitySelectScreen() {
 }
 
 function ProfileSetupScreen() {
-  const { user, setProfile, setCurrentPage, addToast, selectedActivity, activity } = useApp()
+  const { user, setProfile, setCurrentPage, addToast, selectedActivity, activity, setShowTutorial } = useApp()
   const [step, setStep] = useState(1)
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
-  const [avatar, setAvatar] = useState({ background: activity?.color || '#06b6d4', icon: activity?.emoji || '🚴' })
+  const [avatar, setAvatar] = useState({ background: '#06b6d4', icon: '🚴' })
   const [loading, setLoading] = useState(false)
   const [customEmoji, setCustomEmoji] = useState('')
   const [showCustom, setShowCustom] = useState(false)
   const fileRef = useRef(null)
 
+  // Update avatar when activity is loaded
+  useEffect(() => {
+    if (activity) {
+      setAvatar({ background: activity.color, icon: activity.emoji })
+    }
+  }, [activity])
+
   const handleSave = async () => {
-    if (!firstName.trim() || !lastName.trim()) { addToast('Enter your name', 'error'); return }
+    if (!firstName.trim()) { addToast('Enter your name', 'error'); return }
     setLoading(true)
     try {
+      const fullName = lastName.trim() ? `${firstName.trim()} ${lastName.trim()}` : firstName.trim()
       const { data, error } = await supabase.from('profiles').upsert({
-        id: user.id, email: user.email, first_name: firstName.trim(), last_name: lastName.trim(),
-        name: `${firstName.trim()} ${lastName.trim()}`, avatar_background: avatar.background,
+        id: user.id, email: user.email, first_name: firstName.trim(), last_name: lastName.trim() || null,
+        name: fullName, avatar_background: avatar.background,
         avatar_icon: avatar.icon, xp: 0, preferred_activity: selectedActivity, updated_at: new Date().toISOString()
       }).select().single()
       if (error) throw error
-      setProfile(data); addToast('Profile saved!', 'success'); setCurrentPage('home')
+      setProfile(data); addToast('Profile saved!', 'success'); setCurrentPage('home'); setShowTutorial(true)
     } catch { addToast('Failed to save', 'error') }
     finally { setLoading(false) }
   }
@@ -576,7 +633,7 @@ function ProfileSetupScreen() {
       </div>
       <div className="p-6 pb-8">
         {step === 1 ? (
-          <button onClick={() => setStep(2)} disabled={!firstName.trim() || !lastName.trim()} className={`w-full font-bold py-4 rounded-xl disabled:opacity-50 bg-gradient-to-r ${activity?.gradient} text-white`}>Next</button>
+          <button onClick={() => setStep(2)} disabled={!firstName.trim()} className={`w-full font-bold py-4 rounded-xl disabled:opacity-50 bg-gradient-to-r ${activity?.gradient} text-white`}>Next</button>
         ) : (
           <div className="space-y-3">
             <button onClick={handleSave} disabled={loading} className={`w-full font-bold py-4 rounded-xl disabled:opacity-50 flex items-center justify-center gap-2 bg-gradient-to-r ${activity?.gradient} text-white`}>
@@ -603,11 +660,13 @@ function MainApp() {
         {currentPage === 'territory' && <TerritoryPage />}
         {currentPage === 'leaderboard' && <LeaderboardPage />}
         {currentPage === 'profile' && <ProfilePage />}
+        {currentPage === 'settings' && <SettingsPage />}
+        {currentPage === 'kingOfCity' && <KingOfCityPage />}
         {currentPage === 'clan' && <ClanPage />}
         {currentPage === 'joinClan' && <JoinClanPage />}
         {currentPage === 'createClan' && <CreateClanPage />}
       </div>
-      {!['ride', 'rideSummary', 'routes', 'joinClan', 'createClan'].includes(currentPage) && <BottomNav />}
+      {!['ride', 'rideSummary', 'routes', 'joinClan', 'createClan', 'settings', 'kingOfCity'].includes(currentPage) && <BottomNav />}
     </div>
   )
 }
@@ -653,13 +712,21 @@ function HomePage() {
         </button>
       </div>
 
-      {/* Activity Pills */}
+      {/* Activity Pills - Toggleable */}
       <div className="flex gap-2 bg-slate-800/50 rounded-xl p-1.5">
         {Object.values(ACTIVITIES).map(act => (
-          <div key={act.id} className={`flex-1 py-2 px-2 rounded-lg flex items-center justify-center gap-1 ${selectedActivity === act.id ? '' : 'opacity-40'}`} style={selectedActivity === act.id ? { backgroundColor: `${act.color}30` } : {}}>
-            <span className="text-lg">{act.emoji}</span>
-            <span className="text-xs font-medium text-white hidden sm:inline">{act.name}</span>
-          </div>
+          <button 
+            key={act.id} 
+            onClick={async () => {
+              setSelectedActivity(act.id)
+              if (user) await supabase.from('profiles').update({ preferred_activity: act.id }).eq('id', user.id)
+            }}
+            className={`flex-1 py-2 px-2 rounded-lg flex flex-col items-center justify-center gap-1 transition-all ${selectedActivity === act.id ? '' : 'opacity-40 hover:opacity-70'}`} 
+            style={selectedActivity === act.id ? { backgroundColor: `${act.color}30` } : {}}
+          >
+            <span className="text-xl">{act.emoji}</span>
+            <span className="text-xs font-medium text-white">{act.name}</span>
+          </button>
         ))}
       </div>
 
@@ -726,6 +793,30 @@ function HomePage() {
           </div>
           <Trophy className="w-8 h-8" style={{ color: activity?.color }} />
         </div>
+      </div>
+
+      {/* King of the City */}
+      <div onClick={() => setCurrentPage('kingOfCity')} className="bg-gradient-to-br from-amber-500/20 to-orange-600/20 rounded-2xl p-4 border border-amber-500/30 cursor-pointer">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="w-12 h-12 bg-amber-500/30 rounded-xl flex items-center justify-center">
+            <Crown className="w-6 h-6 text-amber-400" />
+          </div>
+          <div className="flex-1">
+            <h3 className="font-semibold text-white flex items-center gap-2">
+              King of the City
+              {actTiles.length < 50 && <Lock className="w-4 h-4 text-slate-500" />}
+            </h3>
+            <p className="text-sm text-amber-300/70">
+              {actTiles.length >= 50 ? 'Compete on city tracks!' : `${50 - actTiles.length} more tiles to unlock`}
+            </p>
+          </div>
+          <ChevronRight className="w-5 h-5 text-amber-400" />
+        </div>
+        {actTiles.length >= 50 && (
+          <div className="bg-black/20 rounded-lg p-2 text-center">
+            <span className="text-xs text-amber-300">🏆 Weekly competition active</span>
+          </div>
+        )}
       </div>
 
       {/* Clan */}
@@ -822,17 +913,72 @@ function RoutesPage() {
 
 // ============== RECORDING PAGE ==============
 function RecordingPage() {
-  const { user, setRides, setCurrentPage, addToast, setLastRide, triggerConfetti, addXp, calcStreak, selectedActivity, activity } = useApp()
+  const { user, setRides, setCurrentPage, addToast, setLastRide, triggerConfetti, addXp, calcStreak, selectedActivity, activity, profile } = useApp()
   const [state, setState] = useState('idle')
   const [stats, setStats] = useState({ distance: 0, duration: 0, tiles: 0, speed: 0 })
   const [gps, setGps] = useState('waiting')
   const [cells, setCells] = useState(new Set())
   const [showEnd, setShowEnd] = useState(false)
+  const [trackChallenge, setTrackChallenge] = useState(null)
+  const [trackCompleted, setTrackCompleted] = useState(false)
 
   const mapRef = useRef(null), markerRef = useRef(null), containerRef = useRef(null)
   const startRef = useRef(null), pauseRef = useRef(null), pausedRef = useRef(0)
   const watchRef = useRef(null), timerRef = useRef(null), pointsRef = useRef([])
 
+  // Check for active track challenge
+  useEffect(() => {
+    const saved = localStorage.getItem('activeTrackChallenge')
+    if (saved) {
+      try {
+        const challenge = JSON.parse(saved)
+        if (challenge.isActive) {
+          setTrackChallenge(challenge)
+        }
+      } catch {}
+    }
+  }, [])
+
+  // Check if track distance reached
+  useEffect(() => {
+    if (trackChallenge && !trackCompleted && state === 'recording') {
+      const targetDistance = trackChallenge.distance * 1000 // Convert km to meters
+      if (stats.distance >= targetDistance) {
+        setTrackCompleted(true)
+        const timeSeconds = Math.floor(stats.duration)
+        saveTrackTime(trackChallenge, timeSeconds)
+        triggerConfetti()
+        addToast(`🏆 Track completed! Time: ${formatTrackTime(timeSeconds)}`, 'success')
+      }
+    }
+  }, [stats.distance, trackChallenge, trackCompleted, state, stats.duration])
+
+  const formatTrackTime = (seconds) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
+  const saveTrackTime = async (challenge, timeSeconds) => {
+    try {
+      if (challenge.trackId && !['sprint', 'classic', 'king'].includes(challenge.trackId)) {
+        await supabase.from('track_times').insert({
+          user_id: user.id,
+          track_id: challenge.trackId,
+          time_seconds: timeSeconds
+        })
+      }
+      localStorage.removeItem('activeTrackChallenge')
+    } catch (err) {
+      console.error('Failed to save track time:', err)
+    }
+  }
+
+  const clearTrackChallenge = () => {
+    localStorage.removeItem('activeTrackChallenge')
+    setTrackChallenge(null)
+    setTrackCompleted(false)
+  }
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
     navigator.geolocation.getCurrentPosition(
@@ -983,8 +1129,34 @@ function RecordingPage() {
   return (
     <div className="h-screen flex flex-col bg-slate-900">
       <div ref={containerRef} className="flex-1 relative">
+        {/* Track Challenge Banner */}
+        {trackChallenge && (
+          <div className="absolute top-0 left-0 right-0 bg-gradient-to-r from-amber-500 to-orange-500 p-3 z-20 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Crown className="w-5 h-5 text-white" />
+              <div>
+                <p className="text-white font-bold text-sm">{trackChallenge.trackName}</p>
+                <p className="text-white/80 text-xs">
+                  {trackCompleted ? '✅ Completed!' : `Target: ${trackChallenge.distance}km`}
+                </p>
+              </div>
+            </div>
+            {!trackCompleted && (
+              <div className="text-right">
+                <p className="text-white font-bold">{((trackChallenge.distance * 1000 - stats.distance) / 1000).toFixed(2)}km</p>
+                <p className="text-white/80 text-xs">remaining</p>
+              </div>
+            )}
+            {state === 'idle' && (
+              <button onClick={clearTrackChallenge} className="p-1 bg-white/20 rounded">
+                <X className="w-4 h-4 text-white" />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Stats overlay */}
-        <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-slate-900 via-slate-900/95 to-transparent p-6 z-10">
+        <div className={`absolute left-0 right-0 bg-gradient-to-b from-slate-900 via-slate-900/95 to-transparent p-6 z-10 ${trackChallenge ? 'top-14' : 'top-0'}`}>
           <div className="text-center">
             <div className="text-6xl font-bold text-white tabular-nums">{(stats.distance / 1000).toFixed(2)}</div>
             <div className="text-lg font-medium" style={{ color: activity?.color }}>kilometers</div>
@@ -1002,10 +1174,21 @@ function RecordingPage() {
               </div>
             </div>
           )}
+          {/* Track progress bar */}
+          {trackChallenge && state !== 'idle' && !trackCompleted && (
+            <div className="mt-4">
+              <div className="bg-slate-700 rounded-full h-2 overflow-hidden">
+                <div 
+                  className="bg-gradient-to-r from-amber-500 to-orange-500 h-2 rounded-full transition-all" 
+                  style={{ width: `${Math.min((stats.distance / (trackChallenge.distance * 1000)) * 100, 100)}%` }} 
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* GPS indicator */}
-        <div className="absolute top-6 right-6 z-10">
+        <div className={`absolute right-6 z-10 ${trackChallenge ? 'top-20' : 'top-6'}`}>
           <div className="flex items-center gap-2 bg-slate-800/80 rounded-full px-3 py-1.5">
             <div className={`${gpsColor[gps]} w-2 h-2 rounded-full ${gps === 'good' ? 'animate-pulse' : ''}`} />
             <span className="text-xs text-slate-300">{gps === 'good' ? 'Strong' : gps === 'okay' ? 'Fair' : 'Weak'}</span>
@@ -1014,7 +1197,7 @@ function RecordingPage() {
 
         {/* Back button */}
         {state === 'idle' && (
-          <button onClick={() => setCurrentPage('home')} className="absolute top-6 left-6 z-10 bg-slate-800/80 rounded-full p-2">
+          <button onClick={() => { clearTrackChallenge(); setCurrentPage('home') }} className={`absolute left-6 z-10 bg-slate-800/80 rounded-full p-2 ${trackChallenge ? 'top-20' : 'top-6'}`}>
             <ChevronLeft className="w-6 h-6 text-white" />
           </button>
         )}
@@ -1023,9 +1206,9 @@ function RecordingPage() {
       {/* Controls */}
       <div className="bg-slate-800 p-6 border-t border-slate-700">
         {state === 'idle' && (
-          <button onClick={start} className={`w-full bg-gradient-to-r ${activity?.gradient} text-white font-bold py-5 rounded-2xl flex items-center justify-center gap-3`}>
+          <button onClick={start} className={`w-full bg-gradient-to-r ${trackChallenge ? 'from-amber-500 to-orange-500' : activity?.gradient} text-white font-bold py-5 rounded-2xl flex items-center justify-center gap-3`}>
             <Play className="w-7 h-7" fill="currentColor" />
-            <span className="text-xl">Start {activity?.name}</span>
+            <span className="text-xl">{trackChallenge ? `Start ${trackChallenge.trackName}` : `Start ${activity?.name}`}</span>
           </button>
         )}
         {state === 'recording' && (
@@ -1327,6 +1510,18 @@ function ProfilePage() {
         </div>
       </div>
       <div className="p-4 space-y-4">
+        {/* Settings Button */}
+        <button onClick={() => setCurrentPage('settings')} className="w-full bg-slate-800 rounded-xl p-4 border border-slate-700 flex items-center gap-3">
+          <div className="w-10 h-10 bg-slate-700 rounded-lg flex items-center justify-center">
+            <Settings className="w-5 h-5 text-slate-400" />
+          </div>
+          <div className="flex-1 text-left">
+            <div className="font-medium text-white">Settings</div>
+            <div className="text-xs text-slate-400">Avatar, activity, preferences</div>
+          </div>
+          <ChevronRight className="w-5 h-5 text-slate-500" />
+        </button>
+
         <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
           <h2 className="font-semibold text-white mb-3">Activity Breakdown</h2>
           {Object.values(ACTIVITIES).map(act => {
@@ -1350,6 +1545,495 @@ function ProfilePage() {
         <button onClick={handleSignOut} className="w-full bg-red-600/20 text-red-400 font-semibold py-4 rounded-xl border border-red-600/30 flex items-center justify-center gap-2">
           <LogOut className="w-5 h-5" />Sign Out
         </button>
+      </div>
+    </div>
+  )
+}
+
+// ============== SETTINGS PAGE ==============
+function SettingsPage() {
+  const { user, profile, setProfile, setCurrentPage, addToast, selectedActivity, setSelectedActivity, activity } = useApp()
+  const [avatar, setAvatar] = useState({ background: profile?.avatar_background || '#06b6d4', icon: profile?.avatar_icon || '🚴' })
+  const [customEmoji, setCustomEmoji] = useState('')
+  const [showCustom, setShowCustom] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const saveAvatar = async () => {
+    setSaving(true)
+    try {
+      const { data, error } = await supabase.from('profiles').update({
+        avatar_background: avatar.background,
+        avatar_icon: avatar.icon,
+        updated_at: new Date().toISOString()
+      }).eq('id', user.id).select().single()
+      if (error) throw error
+      setProfile(data)
+      addToast('Avatar updated!', 'success')
+    } catch { addToast('Failed to save', 'error') }
+    finally { setSaving(false) }
+  }
+
+  const changeActivity = async (actId) => {
+    setSelectedActivity(actId)
+    await supabase.from('profiles').update({ preferred_activity: actId }).eq('id', user.id)
+    addToast(`Switched to ${ACTIVITIES[actId].name}!`, 'success')
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-900">
+      <div className="bg-slate-800 p-4 border-b border-slate-700 flex items-center gap-4">
+        <button onClick={() => setCurrentPage('profile')} className="p-2 bg-slate-700 rounded-lg">
+          <ChevronLeft className="w-5 h-5 text-white" />
+        </button>
+        <h1 className="text-xl font-bold text-white">Settings</h1>
+      </div>
+
+      <div className="p-4 space-y-6">
+        {/* Avatar Section */}
+        <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+          <h2 className="font-semibold text-white mb-4 flex items-center gap-2">
+            <Camera className="w-5 h-5" style={{ color: activity?.color }} />
+            Edit Avatar
+          </h2>
+          
+          <div className="flex justify-center mb-4">
+            <AvatarDisplay avatar={avatar} size="xl" />
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm text-slate-400 mb-2">Background</label>
+            <div className="flex flex-wrap gap-2">
+              {AVATAR_OPTIONS.backgrounds.map(bg => (
+                <button key={bg} onClick={() => setAvatar(a => ({ ...a, background: bg }))} className={`w-10 h-10 rounded-full transition-transform ${avatar.background === bg ? 'ring-2 ring-white scale-110' : ''}`} style={{ backgroundColor: bg }} />
+              ))}
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm text-slate-400 mb-2">Icon</label>
+            <div className="flex flex-wrap gap-2">
+              {AVATAR_OPTIONS.icons.map(ic => (
+                <button key={ic} onClick={() => { setAvatar(a => ({ ...a, icon: ic })); setCustomEmoji('') }} className={`w-10 h-10 rounded-lg bg-slate-700 flex items-center justify-center text-xl transition-transform ${avatar.icon === ic ? 'ring-2 ring-cyan-400 scale-110' : ''}`}>{ic}</button>
+              ))}
+              <button onClick={() => setShowCustom(!showCustom)} className={`w-10 h-10 rounded-lg bg-slate-700 border-2 border-dashed flex items-center justify-center text-xl ${showCustom ? 'border-cyan-400' : 'border-slate-600'}`}>{customEmoji || '+'}</button>
+            </div>
+            {showCustom && (
+              <input type="text" value={customEmoji} onChange={e => { const em = [...e.target.value].find(c => /\p{Emoji}/u.test(c)); if (em) { setCustomEmoji(em); setAvatar(a => ({ ...a, icon: em })) } }} placeholder="Type emoji..." className="mt-3 w-full px-4 py-3 rounded-xl bg-slate-700 text-center text-2xl border border-slate-600" maxLength={2} />
+            )}
+          </div>
+
+          <button onClick={saveAvatar} disabled={saving} className={`w-full bg-gradient-to-r ${activity?.gradient} text-white font-semibold py-3 rounded-xl disabled:opacity-50 flex items-center justify-center gap-2`}>
+            {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Save className="w-5 h-5" />Save Avatar</>}
+          </button>
+        </div>
+
+        {/* Activity Selection */}
+        <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+          <h2 className="font-semibold text-white mb-4">Default Activity</h2>
+          <div className="space-y-2">
+            {Object.values(ACTIVITIES).map(act => (
+              <button
+                key={act.id}
+                onClick={() => changeActivity(act.id)}
+                className={`w-full p-3 rounded-xl flex items-center gap-3 transition-all ${selectedActivity === act.id ? 'border-2' : 'bg-slate-700'}`}
+                style={selectedActivity === act.id ? { borderColor: act.color, backgroundColor: `${act.color}20` } : {}}
+              >
+                <span className="text-2xl">{act.emoji}</span>
+                <div className="flex-1 text-left">
+                  <div className="font-medium text-white">{act.name}</div>
+                  <div className="text-xs text-slate-400">{act.xpMultiplier > 1 ? `${((act.xpMultiplier-1)*100).toFixed(0)}% XP bonus` : 'Standard XP'}</div>
+                </div>
+                {selectedActivity === act.id && <Check className="w-5 h-5" style={{ color: act.color }} />}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ============== KING OF THE CITY PAGE ==============
+function KingOfCityPage() {
+  const { user, profile, tiles, selectedActivity, setCurrentPage, activity, addToast } = useApp()
+  const [tab, setTab] = useState('tracks')
+  const [leaderboard, setLeaderboard] = useState([])
+  const [myTimes, setMyTimes] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [selectedTrack, setSelectedTrack] = useState(null)
+  const [cityTracks, setCityTracks] = useState([])
+  
+  const actTiles = tiles.filter(t => t.activity_type === selectedActivity)
+  const isQualified = actTiles.length >= 50
+  const city = profile?.city || null
+
+  // Load tracks for user's city
+  useEffect(() => {
+    const loadTracks = async () => {
+      if (!city) {
+        // Try to detect city
+        navigator.geolocation.getCurrentPosition(async pos => {
+          try {
+            const res = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${pos.coords.longitude},${pos.coords.latitude}.json?types=place&access_token=${mapboxgl.accessToken}`)
+            const data = await res.json()
+            const detectedCity = data.features?.[0]?.text
+            if (detectedCity && user) {
+              await supabase.from('profiles').update({ city: detectedCity }).eq('id', user.id)
+              loadTracksForCity(detectedCity)
+            }
+          } catch {}
+        })
+        return
+      }
+      loadTracksForCity(city)
+    }
+
+    const loadTracksForCity = async (cityName) => {
+      const { data } = await supabase
+        .from('city_tracks')
+        .select('*')
+        .eq('city', cityName)
+        .eq('activity_type', selectedActivity)
+        .eq('is_active', true)
+      
+      if (data && data.length > 0) {
+        setCityTracks(data)
+        setSelectedTrack(data[0])
+      } else {
+        // No tracks for this city - show default generated ones
+        setCityTracks(generateDefaultTracks(cityName))
+      }
+      setLoading(false)
+    }
+
+    loadTracks()
+  }, [city, selectedActivity, user])
+
+  // Generate default point-to-point tracks based on user location
+  const generateDefaultTracks = (cityName) => {
+    return [
+      { 
+        id: 'sprint', 
+        name: `${cityName} Sprint`, 
+        distance_km: 2, 
+        difficulty: 'easy', 
+        description: 'Quick 2km point-to-point dash', 
+        icon: '⚡',
+        city: cityName,
+        activity_type: selectedActivity
+      },
+      { 
+        id: 'classic', 
+        name: `${cityName} Classic`, 
+        distance_km: 5, 
+        difficulty: 'moderate', 
+        description: 'Standard 5km challenge', 
+        icon: '🔄',
+        city: cityName,
+        activity_type: selectedActivity
+      },
+      { 
+        id: 'king', 
+        name: `King of ${cityName}`, 
+        distance_km: 10, 
+        difficulty: 'hard', 
+        description: 'Ultimate 10km test', 
+        icon: '👑',
+        city: cityName,
+        activity_type: selectedActivity
+      },
+    ]
+  }
+
+  // Load leaderboard for selected track
+  useEffect(() => {
+    const loadLeaderboard = async () => {
+      if (!selectedTrack?.id) return
+      setLoading(true)
+      
+      // For database tracks
+      if (selectedTrack.id && !['sprint', 'classic', 'king'].includes(selectedTrack.id)) {
+        const { data } = await supabase
+          .from('weekly_track_leaderboard')
+          .select('*')
+          .eq('track_id', selectedTrack.id)
+          .order('time_seconds', { ascending: true })
+          .limit(20)
+        
+        setLeaderboard(data || [])
+      } else {
+        // For generated tracks, show empty or mock
+        setLeaderboard([])
+      }
+      setLoading(false)
+    }
+
+    if (tab === 'leaderboard') loadLeaderboard()
+  }, [selectedTrack, tab])
+
+  // Load user's times
+  useEffect(() => {
+    const loadMyTimes = async () => {
+      if (!user) return
+      
+      const { data } = await supabase
+        .from('track_times')
+        .select('*, city_tracks(*)')
+        .eq('user_id', user.id)
+        .order('recorded_at', { ascending: false })
+        .limit(20)
+      
+      setMyTimes(data || [])
+    }
+
+    if (tab === 'myTimes') loadMyTimes()
+  }, [user, tab])
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
+  const startTrackChallenge = (track) => {
+    // Store selected track in localStorage for the ride recording page
+    localStorage.setItem('activeTrackChallenge', JSON.stringify({
+      trackId: track.id,
+      trackName: track.name,
+      distance: track.distance_km,
+      startTime: null,
+      isActive: true
+    }))
+    addToast(`${track.name} selected! Start your ${activity?.name.toLowerCase()} to begin.`, 'success')
+    setCurrentPage('ride')
+  }
+
+  if (!isQualified) {
+    return (
+      <div className="min-h-screen bg-slate-900">
+        <div className="bg-slate-800 p-4 border-b border-slate-700 flex items-center gap-4">
+          <button onClick={() => setCurrentPage('home')} className="p-2 bg-slate-700 rounded-lg">
+            <ChevronLeft className="w-5 h-5 text-white" />
+          </button>
+          <h1 className="text-xl font-bold text-white">King of the City</h1>
+        </div>
+        <div className="p-6 flex flex-col items-center justify-center min-h-[60vh]">
+          <div className="w-24 h-24 bg-amber-500/20 rounded-full flex items-center justify-center mb-6">
+            <Lock className="w-12 h-12 text-amber-400" />
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-2">Not Yet Qualified</h2>
+          <p className="text-slate-400 text-center mb-6">
+            You need <span className="text-amber-400 font-bold">50 tiles</span> to compete.<br/>
+            You currently have <span className="text-white font-bold">{actTiles.length}</span> tiles.
+          </p>
+          <div className="w-full max-w-xs bg-slate-800 rounded-xl p-4">
+            <div className="flex justify-between text-sm mb-2">
+              <span className="text-slate-400">Progress</span>
+              <span className="text-amber-400">{actTiles.length}/50</span>
+            </div>
+            <div className="bg-slate-700 rounded-full h-3 overflow-hidden">
+              <div className="bg-gradient-to-r from-amber-500 to-orange-500 h-3 rounded-full transition-all" style={{ width: `${Math.min((actTiles.length / 50) * 100, 100)}%` }} />
+            </div>
+          </div>
+          <button onClick={() => setCurrentPage('ride')} className={`mt-6 bg-gradient-to-r ${activity?.gradient} text-white font-bold py-3 px-8 rounded-xl`}>
+            Start {activity?.name} to Earn Tiles
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-900 pb-6">
+      <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6">
+        <div className="flex items-center gap-4 mb-4">
+          <button onClick={() => setCurrentPage('home')} className="p-2 bg-white/20 rounded-lg">
+            <ChevronLeft className="w-5 h-5 text-white" />
+          </button>
+          <div>
+            <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+              <Crown className="w-6 h-6" /> King of {city || 'the City'}
+            </h1>
+            <p className="text-white/70 text-sm">Weekly competition • {activity?.name}</p>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-2 bg-black/20 p-1 rounded-lg">
+          <button onClick={() => setTab('tracks')} className={`flex-1 py-2 rounded-md text-sm font-medium ${tab === 'tracks' ? 'bg-white/20 text-white' : 'text-white/60'}`}>
+            🛤️ Tracks
+          </button>
+          <button onClick={() => setTab('leaderboard')} className={`flex-1 py-2 rounded-md text-sm font-medium ${tab === 'leaderboard' ? 'bg-white/20 text-white' : 'text-white/60'}`}>
+            🏆 Rankings
+          </button>
+          <button onClick={() => setTab('myTimes')} className={`flex-1 py-2 rounded-md text-sm font-medium ${tab === 'myTimes' ? 'bg-white/20 text-white' : 'text-white/60'}`}>
+            ⏱️ My Times
+          </button>
+        </div>
+      </div>
+
+      <div className="p-4">
+        {tab === 'tracks' && (
+          <div className="space-y-4">
+            {/* How it works */}
+            <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
+              <h3 className="font-semibold text-white mb-2 flex items-center gap-2">
+                <HelpCircle className="w-4 h-4 text-amber-400" /> How Point-to-Point Works
+              </h3>
+              <ol className="text-sm text-slate-400 space-y-1 list-decimal list-inside">
+                <li>Select a track and tap "Race Now"</li>
+                <li>Travel the required distance as fast as you can</li>
+                <li>Your time is recorded when you hit the distance</li>
+                <li>Compete for the best weekly time!</li>
+              </ol>
+            </div>
+
+            {!city && (
+              <div className="bg-amber-500/20 rounded-xl p-4 border border-amber-500/30">
+                <p className="text-amber-300 text-sm">📍 Enable location to see tracks for your city</p>
+              </div>
+            )}
+            
+            {cityTracks.map(track => (
+              <div key={track.id} className="bg-slate-800 rounded-2xl p-4 border border-slate-700">
+                <div className="flex items-start gap-4">
+                  <div className="w-14 h-14 rounded-xl flex items-center justify-center text-2xl" style={{ backgroundColor: DIFFICULTY[track.difficulty]?.color + '20' }}>
+                    {track.icon}
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-bold text-white">{track.name}</h3>
+                    <p className="text-sm text-slate-400 mt-1">{track.description}</p>
+                    <div className="flex gap-2 mt-2">
+                      <span className="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">📍 {track.distance_km}km</span>
+                      <span className="px-2 py-1 rounded text-xs" style={{ backgroundColor: DIFFICULTY[track.difficulty]?.color + '30', color: DIFFICULTY[track.difficulty]?.color }}>{DIFFICULTY[track.difficulty]?.name}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-4">
+                  <button 
+                    onClick={() => { setSelectedTrack(track); setTab('leaderboard') }} 
+                    className="flex-1 bg-slate-700 text-white font-semibold py-2 rounded-xl text-sm"
+                  >
+                    View Rankings
+                  </button>
+                  <button 
+                    onClick={() => startTrackChallenge(track)} 
+                    className="flex-1 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold py-2 rounded-xl text-sm flex items-center justify-center gap-1"
+                  >
+                    <Play className="w-4 h-4" /> Race Now
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tab === 'leaderboard' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-white">Weekly Rankings</h2>
+              <span className="text-xs text-amber-400 bg-amber-400/20 px-2 py-1 rounded">Resets Monday</span>
+            </div>
+            
+            {/* Track selector */}
+            <div className="flex gap-2 overflow-x-auto pb-2">
+              {cityTracks.map(track => (
+                <button
+                  key={track.id}
+                  onClick={() => setSelectedTrack(track)}
+                  className={`px-4 py-2 rounded-lg whitespace-nowrap text-sm flex items-center gap-1 ${selectedTrack?.id === track.id ? 'bg-amber-500 text-white' : 'bg-slate-800 text-slate-400'}`}
+                >
+                  {track.icon} {track.distance_km}km
+                </button>
+              ))}
+            </div>
+
+            {selectedTrack && (
+              <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700">
+                <p className="text-white font-medium">{selectedTrack.name}</p>
+                <p className="text-xs text-slate-400">{selectedTrack.distance_km}km • {DIFFICULTY[selectedTrack.difficulty]?.name}</p>
+              </div>
+            )}
+
+            {loading ? (
+              <div className="text-center py-12"><Loader2 className="w-8 h-8 animate-spin mx-auto text-slate-500" /></div>
+            ) : leaderboard.length > 0 ? (
+              <div className="space-y-2">
+                {leaderboard.map((entry, i) => (
+                  <div key={entry.id || i} className={`bg-slate-800 rounded-xl p-4 flex items-center gap-4 border ${entry.user_id === user?.id ? 'border-amber-500 bg-amber-500/10' : 'border-slate-700'}`}>
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${i === 0 ? 'bg-amber-500' : i === 1 ? 'bg-slate-400' : i === 2 ? 'bg-orange-700' : 'bg-slate-700 text-slate-400'} text-white`}>
+                      {i === 0 ? '👑' : i + 1}
+                    </div>
+                    <AvatarDisplay avatar={{ background: entry.avatar_background, icon: entry.avatar_icon }} size="sm" />
+                    <div className="flex-1">
+                      <div className="font-semibold text-white">
+                        {entry.first_name} {entry.last_name}
+                        {entry.user_id === user?.id && <span className="ml-2 text-xs text-amber-400">(You)</span>}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {new Date(entry.recorded_at).toLocaleDateString()}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-bold text-amber-400 text-lg">{formatTime(entry.time_seconds)}</div>
+                    </div>
+                    {i < 3 && <div className="text-xl">{['🥇', '🥈', '🥉'][i]}</div>}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12">
+                <Trophy className="w-16 h-16 mx-auto mb-4 text-slate-600" />
+                <p className="text-slate-500">No times recorded yet this week</p>
+                <p className="text-sm text-slate-600 mb-4">Be the first to set a time!</p>
+                <button 
+                  onClick={() => selectedTrack && startTrackChallenge(selectedTrack)} 
+                  className="bg-amber-500 text-white font-semibold py-2 px-6 rounded-xl"
+                >
+                  Race Now
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === 'myTimes' && (
+          <div className="space-y-4">
+            <h2 className="font-semibold text-white">Your Best Times</h2>
+            
+            {myTimes.length > 0 ? (
+              <div className="space-y-2">
+                {myTimes.map((time, i) => (
+                  <div key={time.id} className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-lg flex items-center justify-center text-xl" style={{ backgroundColor: DIFFICULTY[time.city_tracks?.difficulty]?.color + '20' }}>
+                        {time.city_tracks?.icon || '🏁'}
+                      </div>
+                      <div className="flex-1">
+                        <div className="font-medium text-white">{time.city_tracks?.name || 'Track'}</div>
+                        <div className="text-xs text-slate-400">
+                          {time.city_tracks?.distance_km}km • {new Date(time.recorded_at).toLocaleDateString()}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-amber-400 text-lg">{formatTime(time.time_seconds)}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12">
+                <Clock className="w-16 h-16 mx-auto mb-4 text-slate-600" />
+                <p className="text-slate-500">No times recorded yet</p>
+                <p className="text-sm text-slate-600 mb-4">Complete a track challenge to see your times here</p>
+                <button onClick={() => setTab('tracks')} className="bg-amber-500 text-white font-semibold py-2 px-6 rounded-xl">
+                  View Tracks
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
