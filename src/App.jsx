@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext, useMemo } from 'react'
-import { MapPin, Play, Pause, Trophy, Shield, Bell, User, Target, Clock, TrendingUp, Award, LogOut, Mail, AlertCircle, Loader2, CheckCircle, X, Navigation, Camera, Save, ChevronRight, Zap, Flag, Star, HelpCircle, Users, Crown, Calendar, Flame, Lock, Unlock, StopCircle, ChevronLeft, Plus, Copy, Check, Mountain, Bike, Sun, Cloud, CloudRain, Wind, Route, Sparkles, Settings } from 'lucide-react'
+import { MapPin, Play, Pause, Trophy, Shield, Bell, User, Target, Clock, TrendingUp, Award, LogOut, Mail, AlertCircle, Loader2, CheckCircle, X, Navigation, Camera, Save, ChevronRight, Zap, Flag, Star, HelpCircle, Users, Crown, Calendar, Flame, Lock, Unlock, StopCircle, ChevronLeft, Plus, Copy, Check, Mountain, Bike, Sun, Cloud, CloudRain, Wind, Sparkles, Settings, Timer } from 'lucide-react'
 import { supabase } from './supabase'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
@@ -350,7 +350,7 @@ function TutorialOverlay() {
     { icon: <MapPin className="w-16 h-16" style={{ color: activity?.color }} />, title: 'Welcome to TerritoryTrack!', desc: `Claim territory while ${activity?.name.toLowerCase()}. The more you move, the more you own.` },
     { icon: <Navigation className="w-16 h-16 text-emerald-400" />, title: 'Track Your Activity', desc: `Tap 'Start ${activity?.name}' to begin tracking your route with GPS.` },
     { icon: <Target className="w-16 h-16 text-purple-400" />, title: 'Unlock Routes', desc: 'Complete the same route 3 times in 7 days to unlock it and claim tiles.' },
-    { icon: <Route className="w-16 h-16 text-amber-400" />, title: 'Smart Routes', desc: 'Get personalized route suggestions based on weather and your progress!' },
+    { icon: <Sparkles className="w-16 h-16 text-amber-400" />, title: 'Smart Routes', desc: 'Get personalized route suggestions based on weather and your progress!' },
     { icon: <Trophy className="w-16 h-16 text-yellow-400" />, title: 'Ready to Go!', desc: 'Earn XP, unlock achievements, and dominate the leaderboard!' }
   ]
   const s = steps[step - 1]
