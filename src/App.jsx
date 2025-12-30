@@ -196,9 +196,12 @@ export default function App() {
     }
   }, [user, profile, activity, addToast, triggerConfetti])
 
-  // Fetch weather
+  // Fetch weather and user location
+  const [userLocation, setUserLocation] = useState(null)
+  
   useEffect(() => {
     navigator.geolocation.getCurrentPosition(async pos => {
+      setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude })
       try {
         const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${pos.coords.latitude}&longitude=${pos.coords.longitude}&current=temperature_2m,weather_code,wind_speed_10m`)
         const data = await res.json()
@@ -210,24 +213,151 @@ export default function App() {
     }, () => {})
   }, [])
 
-  // Generate routes
+  // Generate smart territory-maximizing routes
   useEffect(() => {
-    if (!selectedActivity) return
-    const act = ACTIVITIES[selectedActivity]
-    const owned = tiles.filter(t => t.activity_type === selectedActivity).length
-    const base = act.avgSpeed * 0.5
-    let mult = 1
-    if (weather?.condition === 'rain') mult *= 0.7
-    if (weather?.wind > 20) mult *= 0.9
+    if (!selectedActivity || !userLocation) return
     
-    const diff = owned > 300 ? 'hard' : owned > 100 ? 'moderate' : 'easy'
-    setSuggestedRoutes([
-      { id: 'quick', name: 'Quick Session', duration: 20, distance: (base*0.4*mult).toFixed(1), difficulty: 'easy', tiles: 5+Math.floor(Math.random()*5), unlocked: true },
-      { id: 'standard', name: 'Standard Route', duration: 45, distance: (base*mult).toFixed(1), difficulty: owned > 50 ? 'moderate' : 'easy', tiles: 15+Math.floor(Math.random()*10), unlocked: true },
-      { id: 'challenge', name: 'Challenge Route', duration: 75, distance: (base*1.8*mult).toFixed(1), difficulty: diff, tiles: 30+Math.floor(Math.random()*20), unlocked: owned >= 25 },
-      { id: 'explorer', name: 'Territory Explorer', duration: 60, distance: (base*1.5*mult).toFixed(1), difficulty: 'moderate', tiles: 25+Math.floor(Math.random()*15), unlocked: owned >= 10 },
-    ])
-  }, [selectedActivity, tiles, weather])
+    const generateSmartRoutes = async () => {
+      const act = ACTIVITIES[selectedActivity]
+      const ownedTiles = tiles.filter(t => t.activity_type === selectedActivity)
+      const ownedH3 = new Set(ownedTiles.map(t => t.h3_index))
+      
+      // Get cells around user's location
+      const userCell = latLngToCell(userLocation.lat, userLocation.lng, CONFIG.H3_RESOLUTION)
+      
+      // Find unclaimed cells in expanding rings around user
+      const findUnclaimedDirection = (bearing, distanceKm) => {
+        const R = 6371 // Earth radius in km
+        const lat1 = userLocation.lat * Math.PI / 180
+        const lng1 = userLocation.lng * Math.PI / 180
+        const brng = bearing * Math.PI / 180
+        const d = distanceKm / R
+        
+        const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(brng))
+        const lng2 = lng1 + Math.atan2(Math.sin(brng) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2))
+        
+        return {
+          lat: lat2 * 180 / Math.PI,
+          lng: lng2 * 180 / Math.PI
+        }
+      }
+      
+      // Count unclaimed tiles along a route direction
+      const countUnclaimedInDirection = (bearing, distanceKm, samples = 10) => {
+        let unclaimed = 0
+        for (let i = 1; i <= samples; i++) {
+          const point = findUnclaimedDirection(bearing, (distanceKm / samples) * i)
+          const cell = latLngToCell(point.lat, point.lng, CONFIG.H3_RESOLUTION)
+          if (!ownedH3.has(cell)) unclaimed++
+        }
+        return unclaimed
+      }
+      
+      // Analyze 8 directions and find best ones
+      const directions = []
+      for (let bearing = 0; bearing < 360; bearing += 45) {
+        const unclaimed2km = countUnclaimedInDirection(bearing, 2)
+        const unclaimed5km = countUnclaimedInDirection(bearing, 5)
+        const unclaimed10km = countUnclaimedInDirection(bearing, 10)
+        directions.push({
+          bearing,
+          name: ['North', 'Northeast', 'East', 'Southeast', 'South', 'Southwest', 'West', 'Northwest'][bearing / 45],
+          unclaimed2km,
+          unclaimed5km,
+          unclaimed10km,
+          score: unclaimed2km * 3 + unclaimed5km * 2 + unclaimed10km
+        })
+      }
+      
+      // Sort by score (most unclaimed tiles)
+      directions.sort((a, b) => b.score - a.score)
+      const bestDir = directions[0]
+      const secondDir = directions[1]
+      
+      // Weather adjustments
+      let mult = 1
+      if (weather?.condition === 'rain') mult *= 0.7
+      if (weather?.wind > 20) mult *= 0.9
+      
+      // Generate waypoints for the best route
+      const generateWaypoints = (bearing, distanceKm) => {
+        const waypoints = []
+        const midpoint = findUnclaimedDirection(bearing, distanceKm / 2)
+        const endpoint = findUnclaimedDirection(bearing, distanceKm)
+        
+        // Create a loop: start -> midpoint offset -> endpoint -> return
+        const perpBearing = (bearing + 90) % 360
+        const loopOffset = findUnclaimedDirection(perpBearing, distanceKm * 0.2)
+        
+        waypoints.push(userLocation) // Start
+        waypoints.push({ lat: midpoint.lat + (loopOffset.lat - userLocation.lat) * 0.5, lng: midpoint.lng + (loopOffset.lng - userLocation.lng) * 0.5 })
+        waypoints.push(endpoint) // Far point
+        waypoints.push({ lat: midpoint.lat - (loopOffset.lat - userLocation.lat) * 0.5, lng: midpoint.lng - (loopOffset.lng - userLocation.lng) * 0.5 })
+        waypoints.push(userLocation) // Return
+        
+        return waypoints
+      }
+      
+      const baseDistance = act.avgSpeed * 0.5 * mult
+      
+      setSuggestedRoutes([
+        { 
+          id: 'quick', 
+          name: 'Quick Expansion', 
+          duration: 20, 
+          distance: (baseDistance * 0.4).toFixed(1), 
+          difficulty: 'easy', 
+          estimatedTiles: Math.max(5, bestDir.unclaimed2km),
+          direction: bestDir.name,
+          bearing: bestDir.bearing,
+          waypoints: generateWaypoints(bestDir.bearing, baseDistance * 0.4),
+          unlocked: true,
+          description: `Head ${bestDir.name.toLowerCase()} to claim ~${bestDir.unclaimed2km} new tiles`
+        },
+        { 
+          id: 'standard', 
+          name: 'Territory Raid', 
+          duration: 45, 
+          distance: baseDistance.toFixed(1), 
+          difficulty: ownedTiles.length > 50 ? 'moderate' : 'easy', 
+          estimatedTiles: Math.max(15, bestDir.unclaimed5km + 5),
+          direction: bestDir.name,
+          bearing: bestDir.bearing,
+          waypoints: generateWaypoints(bestDir.bearing, baseDistance),
+          unlocked: true,
+          description: `Expand ${bestDir.name.toLowerCase()} through unclaimed territory`
+        },
+        { 
+          id: 'explorer', 
+          name: 'New Frontier', 
+          duration: 60, 
+          distance: (baseDistance * 1.5).toFixed(1), 
+          difficulty: 'moderate', 
+          estimatedTiles: Math.max(20, secondDir.unclaimed5km + 10),
+          direction: secondDir.name,
+          bearing: secondDir.bearing,
+          waypoints: generateWaypoints(secondDir.bearing, baseDistance * 1.5),
+          unlocked: ownedTiles.length >= 10,
+          description: `Explore ${secondDir.name.toLowerCase()} - lots of unclaimed area!`
+        },
+        { 
+          id: 'conquest', 
+          name: 'Grand Conquest', 
+          duration: 90, 
+          distance: (baseDistance * 2).toFixed(1), 
+          difficulty: 'hard', 
+          estimatedTiles: Math.max(30, bestDir.unclaimed10km + 15),
+          direction: bestDir.name,
+          bearing: bestDir.bearing,
+          waypoints: generateWaypoints(bestDir.bearing, baseDistance * 2),
+          unlocked: ownedTiles.length >= 25,
+          description: `Major expansion ${bestDir.name.toLowerCase()} - claim maximum territory!`
+        },
+      ])
+    }
+    
+    generateSmartRoutes()
+  }, [selectedActivity, tiles, weather, userLocation])
 
   // Auth listener
   useEffect(() => {
@@ -303,7 +433,7 @@ export default function App() {
     currentPage, setCurrentPage, addToast, lastRide, setLastRide, handleSignOut, loadData,
     triggerConfetti, clan, setClan, loadClan, achievements, streak, calcStreak, addXp,
     selectedActivity, setSelectedActivity, weather, suggestedRoutes, activity,
-    showTutorial, setShowTutorial
+    showTutorial, setShowTutorial, userLocation
   }
 
   if (loading) return (
@@ -655,6 +785,7 @@ function MainApp() {
       <div className="flex-1 overflow-auto">
         {currentPage === 'home' && <HomePage />}
         {currentPage === 'routes' && <RoutesPage />}
+        {currentPage === 'routePreview' && <RoutePreviewPage />}
         {currentPage === 'ride' && <RecordingPage />}
         {currentPage === 'rideSummary' && <SummaryPage />}
         {currentPage === 'territory' && <TerritoryPage />}
@@ -666,7 +797,7 @@ function MainApp() {
         {currentPage === 'joinClan' && <JoinClanPage />}
         {currentPage === 'createClan' && <CreateClanPage />}
       </div>
-      {!['ride', 'rideSummary', 'routes', 'joinClan', 'createClan', 'settings', 'kingOfCity'].includes(currentPage) && <BottomNav />}
+      {!['ride', 'rideSummary', 'routes', 'routePreview', 'joinClan', 'createClan', 'settings', 'kingOfCity'].includes(currentPage) && <BottomNav />}
     </div>
   )
 }
@@ -749,8 +880,8 @@ function HomePage() {
       <div className="bg-slate-800/50 rounded-2xl p-4 border border-slate-700">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <Sparkles className="w-5 h-5" style={{ color: activity?.color }} />
-            <span className="font-semibold text-white">Suggested Routes</span>
+            <Target className="w-5 h-5" style={{ color: activity?.color }} />
+            <span className="font-semibold text-white">Territory Expansion Routes</span>
           </div>
           <button onClick={() => setCurrentPage('routes')} className="text-sm" style={{ color: activity?.color }}>See all →</button>
         </div>
@@ -758,18 +889,19 @@ function HomePage() {
           {suggestedRoutes.slice(0,2).map(route => (
             <button 
               key={route.id} 
-              onClick={() => route.unlocked && setCurrentPage('routes')}
+              onClick={() => route.unlocked && setCurrentPage('routePreview', route)}
               className={`w-full bg-slate-800 rounded-xl p-3 flex items-center gap-3 text-left transition-all ${!route.unlocked ? 'opacity-50 cursor-not-allowed' : 'hover:bg-slate-700 cursor-pointer'}`}
             >
-              <div className="w-10 h-10 rounded-lg flex items-center justify-center text-lg" style={{ backgroundColor: DIFFICULTY[route.difficulty]?.color + '20' }}>
-                {DIFFICULTY[route.difficulty]?.icon}
+              <div className="w-12 h-12 rounded-lg flex items-center justify-center text-lg" style={{ backgroundColor: DIFFICULTY[route.difficulty]?.color + '20' }}>
+                <Navigation className="w-6 h-6" style={{ color: DIFFICULTY[route.difficulty]?.color, transform: `rotate(${route.bearing || 0}deg)` }} />
               </div>
               <div className="flex-1">
                 <div className="font-medium text-white flex items-center gap-2">
                   {route.name}
                   {!route.unlocked && <Lock className="w-3 h-3 text-slate-500" />}
                 </div>
-                <div className="text-xs text-slate-400">{route.duration}min • {route.distance}km</div>
+                <div className="text-xs text-slate-400">{route.duration}min • {route.distance}km • {route.direction}</div>
+                {route.description && <div className="text-xs mt-1" style={{ color: activity?.color }}>~{route.estimatedTiles} new tiles</div>}
               </div>
               <ChevronRight className="w-5 h-5 text-slate-500" />
             </button>
@@ -870,8 +1002,8 @@ function RoutesPage() {
             <ChevronLeft className="w-5 h-5 text-white" />
           </button>
           <div>
-            <h1 className="text-2xl font-bold text-white">Route Suggestions</h1>
-            <p className="text-white/70 text-sm">Based on your {owned} tiles</p>
+            <h1 className="text-2xl font-bold text-white">Territory Expansion</h1>
+            <p className="text-white/70 text-sm">Smart routes to maximize new tiles</p>
           </div>
         </div>
         {weather && (
@@ -883,39 +1015,280 @@ function RoutesPage() {
       </div>
 
       <div className="p-4 space-y-4">
+        {/* Explanation */}
+        <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
+          <div className="flex items-start gap-3">
+            <Target className="w-6 h-6 text-cyan-400 mt-0.5" />
+            <div>
+              <h3 className="font-semibold text-white">How it works</h3>
+              <p className="text-sm text-slate-400 mt-1">
+                Routes are analyzed based on your current territory. We find directions with the most unclaimed tiles to maximize your expansion!
+              </p>
+            </div>
+          </div>
+        </div>
+
         {suggestedRoutes.map(route => {
           const diff = DIFFICULTY[route.difficulty]
           return (
             <div key={route.id} className={`bg-slate-800 rounded-2xl p-4 border border-slate-700 ${!route.unlocked ? 'opacity-60' : ''}`}>
               <div className="flex items-start gap-4">
-                <div className="w-14 h-14 rounded-xl flex items-center justify-center text-2xl" style={{ backgroundColor: diff?.color + '20' }}>
-                  {diff?.icon}
+                <div className="w-14 h-14 rounded-xl flex items-center justify-center" style={{ backgroundColor: diff?.color + '20' }}>
+                  <Navigation className="w-7 h-7" style={{ color: diff?.color, transform: `rotate(${route.bearing || 0}deg)` }} />
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <h3 className="font-bold text-white">{route.name}</h3>
                     {!route.unlocked && <Lock className="w-4 h-4 text-slate-500" />}
                   </div>
+                  {route.description && (
+                    <p className="text-sm text-slate-400 mt-1">{route.description}</p>
+                  )}
                   <div className="flex flex-wrap gap-2 mt-2">
                     <span className="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">⏱ {route.duration}min</span>
                     <span className="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">📍 {route.distance}km</span>
-                    <span className="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">🗺 ~{route.tiles} tiles</span>
-                    <span className="px-2 py-1 rounded text-xs" style={{ backgroundColor: diff?.color + '30', color: diff?.color }}>{diff?.name}</span>
+                    <span className="px-2 py-1 rounded text-xs" style={{ backgroundColor: activity?.color + '30', color: activity?.color }}>
+                      🗺 ~{route.estimatedTiles} tiles
+                    </span>
+                    <span className="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">🧭 {route.direction}</span>
                   </div>
                 </div>
               </div>
               {route.unlocked ? (
-                <button onClick={() => setCurrentPage('ride')} className={`w-full mt-4 bg-gradient-to-r ${activity?.gradient} text-white font-semibold py-3 rounded-xl`}>
-                  Start Route
-                </button>
+                <div className="flex gap-2 mt-4">
+                  <button 
+                    onClick={() => {
+                      localStorage.setItem('activeRoute', JSON.stringify(route))
+                      setCurrentPage('routePreview')
+                    }} 
+                    className="flex-1 bg-slate-700 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2"
+                  >
+                    <MapPin className="w-4 h-4" /> Preview
+                  </button>
+                  <button 
+                    onClick={() => {
+                      localStorage.setItem('activeRoute', JSON.stringify(route))
+                      setCurrentPage('ride')
+                    }} 
+                    className={`flex-1 bg-gradient-to-r ${activity?.gradient} text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2`}
+                  >
+                    <Play className="w-4 h-4" /> Start
+                  </button>
+                </div>
               ) : (
                 <div className="mt-4 bg-slate-700/50 rounded-xl p-3 text-center text-sm text-slate-400">
-                  🔒 Own {route.id === 'challenge' ? 25 : 10}+ tiles to unlock
+                  🔒 Own {route.id === 'conquest' ? 25 : 10}+ tiles to unlock
                 </div>
               )}
             </div>
           )
         })}
+      </div>
+    </div>
+  )
+}
+
+// ============== ROUTE PREVIEW PAGE ==============
+function RoutePreviewPage() {
+  const { setCurrentPage, activity, userLocation, tiles, selectedActivity } = useApp()
+  const [route, setRoute] = useState(null)
+  const [mapLoaded, setMapLoaded] = useState(false)
+  const mapRef = useRef(null)
+  const containerRef = useRef(null)
+
+  useEffect(() => {
+    const saved = localStorage.getItem('activeRoute')
+    if (saved) {
+      setRoute(JSON.parse(saved))
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!containerRef.current || !route || !userLocation || mapRef.current) return
+
+    mapRef.current = new mapboxgl.Map({
+      container: containerRef.current,
+      style: activity?.mapStyle || 'mapbox://styles/mapbox/dark-v11',
+      center: [userLocation.lng, userLocation.lat],
+      zoom: 13,
+      attributionControl: false
+    })
+
+    mapRef.current.on('load', () => {
+      setMapLoaded(true)
+      
+      // Add user location marker
+      new mapboxgl.Marker({ color: activity?.color })
+        .setLngLat([userLocation.lng, userLocation.lat])
+        .addTo(mapRef.current)
+
+      // Generate route line based on waypoints
+      if (route.waypoints && route.waypoints.length > 1) {
+        const coordinates = route.waypoints.map(wp => [wp.lng, wp.lat])
+        
+        // Add route line
+        mapRef.current.addSource('route', {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'LineString',
+              coordinates
+            }
+          }
+        })
+
+        mapRef.current.addLayer({
+          id: 'route-line',
+          type: 'line',
+          source: 'route',
+          layout: {
+            'line-join': 'round',
+            'line-cap': 'round'
+          },
+          paint: {
+            'line-color': activity?.color || '#06b6d4',
+            'line-width': 4,
+            'line-opacity': 0.8,
+            'line-dasharray': [2, 1]
+          }
+        })
+
+        // Add direction arrows
+        mapRef.current.addLayer({
+          id: 'route-arrows',
+          type: 'symbol',
+          source: 'route',
+          layout: {
+            'symbol-placement': 'line',
+            'symbol-spacing': 100,
+            'text-field': '▶',
+            'text-size': 14,
+            'text-keep-upright': false
+          },
+          paint: {
+            'text-color': activity?.color || '#06b6d4'
+          }
+        })
+
+        // Fit map to route
+        const bounds = new mapboxgl.LngLatBounds()
+        coordinates.forEach(coord => bounds.extend(coord))
+        mapRef.current.fitBounds(bounds, { padding: 50 })
+      }
+
+      // Show owned tiles
+      const ownedTiles = tiles.filter(t => t.activity_type === selectedActivity)
+      if (ownedTiles.length > 0) {
+        const features = ownedTiles.map(t => ({
+          type: 'Feature',
+          geometry: { type: 'Polygon', coordinates: [cellToBoundary(t.h3_index, true)] }
+        }))
+        mapRef.current.addSource('owned-tiles', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features }
+        })
+        mapRef.current.addLayer({
+          id: 'owned-tiles-fill',
+          type: 'fill',
+          source: 'owned-tiles',
+          paint: { 'fill-color': activity?.color, 'fill-opacity': 0.3 }
+        })
+      }
+    })
+
+    return () => {
+      if (mapRef.current) mapRef.current.remove()
+    }
+  }, [route, userLocation, activity, tiles, selectedActivity])
+
+  const startRoute = () => {
+    setCurrentPage('ride')
+  }
+
+  if (!route) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-slate-500" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="h-screen flex flex-col bg-slate-900">
+      {/* Map */}
+      <div ref={containerRef} className="flex-1 relative">
+        {/* Back button */}
+        <button 
+          onClick={() => setCurrentPage('routes')} 
+          className="absolute top-4 left-4 z-10 bg-slate-800/90 rounded-full p-2"
+        >
+          <ChevronLeft className="w-6 h-6 text-white" />
+        </button>
+
+        {/* Route info overlay */}
+        <div className="absolute top-4 right-4 z-10 bg-slate-800/90 rounded-xl p-3 max-w-[200px]">
+          <div className="flex items-center gap-2 mb-2">
+            <Navigation className="w-5 h-5" style={{ color: activity?.color, transform: `rotate(${route.bearing}deg)` }} />
+            <span className="font-bold text-white text-sm">{route.name}</span>
+          </div>
+          <div className="text-xs text-slate-400">
+            <div>📍 {route.distance}km • ⏱ {route.duration}min</div>
+            <div>🧭 Head {route.direction}</div>
+          </div>
+        </div>
+
+        {/* Legend */}
+        <div className="absolute bottom-24 left-4 z-10 bg-slate-800/90 rounded-xl p-3">
+          <div className="text-xs text-slate-400 space-y-1">
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-1 rounded" style={{ backgroundColor: activity?.color }}></div>
+              <span>Suggested route</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 rounded opacity-50" style={{ backgroundColor: activity?.color }}></div>
+              <span>Your territory</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom panel */}
+      <div className="bg-slate-800 p-4 border-t border-slate-700">
+        <div className="flex items-center gap-4 mb-4">
+          <div className="flex-1">
+            <h2 className="font-bold text-white">{route.name}</h2>
+            <p className="text-sm text-slate-400">{route.description}</p>
+          </div>
+          <div className="text-right">
+            <div className="text-2xl font-bold" style={{ color: activity?.color }}>~{route.estimatedTiles}</div>
+            <div className="text-xs text-slate-400">new tiles</div>
+          </div>
+        </div>
+
+        <div className="flex gap-3 mb-4">
+          <div className="flex-1 bg-slate-700 rounded-lg p-3 text-center">
+            <div className="text-lg font-bold text-white">{route.distance}km</div>
+            <div className="text-xs text-slate-400">Distance</div>
+          </div>
+          <div className="flex-1 bg-slate-700 rounded-lg p-3 text-center">
+            <div className="text-lg font-bold text-white">{route.duration}min</div>
+            <div className="text-xs text-slate-400">Duration</div>
+          </div>
+          <div className="flex-1 bg-slate-700 rounded-lg p-3 text-center">
+            <div className="text-lg font-bold text-white">{route.direction}</div>
+            <div className="text-xs text-slate-400">Direction</div>
+          </div>
+        </div>
+
+        <button 
+          onClick={startRoute}
+          className={`w-full bg-gradient-to-r ${activity?.gradient} text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2`}
+        >
+          <Play className="w-6 h-6" fill="currentColor" />
+          Start This Route
+        </button>
       </div>
     </div>
   )
@@ -931,10 +1304,21 @@ function RecordingPage() {
   const [showEnd, setShowEnd] = useState(false)
   const [trackChallenge, setTrackChallenge] = useState(null)
   const [trackCompleted, setTrackCompleted] = useState(false)
+  const [activeRoute, setActiveRoute] = useState(null)
 
   const mapRef = useRef(null), markerRef = useRef(null), containerRef = useRef(null)
   const startRef = useRef(null), pauseRef = useRef(null), pausedRef = useRef(0)
   const watchRef = useRef(null), timerRef = useRef(null), pointsRef = useRef([])
+
+  // Check for active route
+  useEffect(() => {
+    const saved = localStorage.getItem('activeRoute')
+    if (saved) {
+      try {
+        setActiveRoute(JSON.parse(saved))
+      } catch {}
+    }
+  }, [])
 
   // Check for active track challenge
   useEffect(() => {
@@ -944,6 +1328,7 @@ function RecordingPage() {
         const challenge = JSON.parse(saved)
         if (challenge.isActive) {
           setTrackChallenge(challenge)
+        }
         }
       } catch {}
     }
@@ -989,6 +1374,12 @@ function RecordingPage() {
     setTrackChallenge(null)
     setTrackCompleted(false)
   }
+  
+  const clearActiveRoute = () => {
+    localStorage.removeItem('activeRoute')
+    setActiveRoute(null)
+  }
+
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
     navigator.geolocation.getCurrentPosition(
@@ -997,12 +1388,41 @@ function RecordingPage() {
           container: containerRef.current,
           style: activity?.mapStyle || 'mapbox://styles/mapbox/dark-v11',
           center: [pos.coords.longitude, pos.coords.latitude],
-          zoom: 16,
+          zoom: 15,
           attributionControl: false
         })
         markerRef.current = new mapboxgl.Marker({ color: activity?.color })
           .setLngLat([pos.coords.longitude, pos.coords.latitude])
           .addTo(mapRef.current)
+
+        // Add route line if active route exists
+        mapRef.current.on('load', () => {
+          if (activeRoute?.waypoints && activeRoute.waypoints.length > 1) {
+            const coordinates = activeRoute.waypoints.map(wp => [wp.lng, wp.lat])
+            
+            mapRef.current.addSource('suggested-route', {
+              type: 'geojson',
+              data: {
+                type: 'Feature',
+                properties: {},
+                geometry: { type: 'LineString', coordinates }
+              }
+            })
+
+            mapRef.current.addLayer({
+              id: 'suggested-route-line',
+              type: 'line',
+              source: 'suggested-route',
+              layout: { 'line-join': 'round', 'line-cap': 'round' },
+              paint: {
+                'line-color': '#fbbf24',
+                'line-width': 4,
+                'line-opacity': 0.7,
+                'line-dasharray': [2, 1]
+              }
+            })
+          }
+        })
       },
       () => {
         mapRef.current = new mapboxgl.Map({
@@ -1013,7 +1433,7 @@ function RecordingPage() {
       }
     )
     return () => { if (mapRef.current) mapRef.current.remove() }
-  }, [activity])
+  }, [activity, activeRoute])
 
   const start = useCallback(() => {
     setState('recording')
@@ -1135,6 +1555,7 @@ function RecordingPage() {
   }, [])
 
   const gpsColor = { waiting: 'bg-slate-500', good: 'bg-emerald-500', okay: 'bg-amber-500', poor: 'bg-red-500' }
+  const hasBanner = trackChallenge || activeRoute
 
   return (
     <div className="h-screen flex flex-col bg-slate-900">
@@ -1165,8 +1586,30 @@ function RecordingPage() {
           </div>
         )}
 
+        {/* Active Route Banner */}
+        {activeRoute && !trackChallenge && (
+          <div className="absolute top-0 left-0 right-0 p-3 z-20 flex items-center justify-between" style={{ backgroundColor: activity?.color }}>
+            <div className="flex items-center gap-2">
+              <Navigation className="w-5 h-5 text-white" style={{ transform: `rotate(${activeRoute.bearing}deg)` }} />
+              <div>
+                <p className="text-white font-bold text-sm">{activeRoute.name}</p>
+                <p className="text-white/80 text-xs">Head {activeRoute.direction} • ~{activeRoute.estimatedTiles} tiles</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-white font-bold">{activeRoute.distance}km</p>
+              <p className="text-white/80 text-xs">target</p>
+            </div>
+            {state === 'idle' && (
+              <button onClick={clearActiveRoute} className="p-1 bg-white/20 rounded ml-2">
+                <X className="w-4 h-4 text-white" />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Stats overlay */}
-        <div className={`absolute left-0 right-0 bg-gradient-to-b from-slate-900 via-slate-900/95 to-transparent p-6 z-10 ${trackChallenge ? 'top-14' : 'top-0'}`}>
+        <div className={`absolute left-0 right-0 bg-gradient-to-b from-slate-900 via-slate-900/95 to-transparent p-6 z-10 ${hasBanner ? 'top-14' : 'top-0'}`}>
           <div className="text-center">
             <div className="text-6xl font-bold text-white tabular-nums">{(stats.distance / 1000).toFixed(2)}</div>
             <div className="text-lg font-medium" style={{ color: activity?.color }}>kilometers</div>
@@ -1198,7 +1641,7 @@ function RecordingPage() {
         </div>
 
         {/* GPS indicator */}
-        <div className={`absolute right-6 z-10 ${trackChallenge ? 'top-20' : 'top-6'}`}>
+        <div className={`absolute right-6 z-10 ${hasBanner ? 'top-20' : 'top-6'}`}>
           <div className="flex items-center gap-2 bg-slate-800/80 rounded-full px-3 py-1.5">
             <div className={`${gpsColor[gps]} w-2 h-2 rounded-full ${gps === 'good' ? 'animate-pulse' : ''}`} />
             <span className="text-xs text-slate-300">{gps === 'good' ? 'Strong' : gps === 'okay' ? 'Fair' : 'Weak'}</span>
@@ -1207,7 +1650,7 @@ function RecordingPage() {
 
         {/* Back button */}
         {state === 'idle' && (
-          <button onClick={() => { clearTrackChallenge(); setCurrentPage('home') }} className={`absolute left-6 z-10 bg-slate-800/80 rounded-full p-2 ${trackChallenge ? 'top-20' : 'top-6'}`}>
+          <button onClick={() => { clearTrackChallenge(); clearActiveRoute(); setCurrentPage('home') }} className={`absolute left-6 z-10 bg-slate-800/80 rounded-full p-2 ${hasBanner ? 'top-20' : 'top-6'}`}>
             <ChevronLeft className="w-6 h-6 text-white" />
           </button>
         )}
@@ -1216,9 +1659,9 @@ function RecordingPage() {
       {/* Controls */}
       <div className="bg-slate-800 p-6 border-t border-slate-700">
         {state === 'idle' && (
-          <button onClick={start} className={`w-full bg-gradient-to-r ${trackChallenge ? 'from-amber-500 to-orange-500' : activity?.gradient} text-white font-bold py-5 rounded-2xl flex items-center justify-center gap-3`}>
+          <button onClick={start} className={`w-full bg-gradient-to-r ${trackChallenge ? 'from-amber-500 to-orange-500' : activeRoute ? activity?.gradient : activity?.gradient} text-white font-bold py-5 rounded-2xl flex items-center justify-center gap-3`}>
             <Play className="w-7 h-7" fill="currentColor" />
-            <span className="text-xl">{trackChallenge ? `Start ${trackChallenge.trackName}` : `Start ${activity?.name}`}</span>
+            <span className="text-xl">{trackChallenge ? `Start ${trackChallenge.trackName}` : activeRoute ? `Start ${activeRoute.name}` : 'Start Your Adventure'}</span>
           </button>
         )}
         {state === 'recording' && (
