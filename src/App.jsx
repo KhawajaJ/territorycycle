@@ -714,20 +714,23 @@ function HomePage() {
 
       {/* Activity Pills - Toggleable */}
       <div className="flex gap-2 bg-slate-800/50 rounded-xl p-1.5">
-        {Object.values(ACTIVITIES).map(act => (
-          <button 
-            key={act.id} 
-            onClick={async () => {
-              setSelectedActivity(act.id)
-              if (user) await supabase.from('profiles').update({ preferred_activity: act.id }).eq('id', user.id)
-            }}
-            className={`flex-1 py-2 px-2 rounded-lg flex flex-col items-center justify-center gap-1 transition-all ${selectedActivity === act.id ? '' : 'opacity-40 hover:opacity-70'}`} 
-            style={selectedActivity === act.id ? { backgroundColor: `${act.color}30` } : {}}
-          >
-            <span className="text-xl">{act.emoji}</span>
-            <span className="text-xs font-medium text-white">{act.name}</span>
-          </button>
-        ))}
+        {Object.values(ACTIVITIES).map(act => {
+          const isSelected = selectedActivity === act.id
+          return (
+            <button 
+              key={act.id} 
+              onClick={async () => {
+                setSelectedActivity(act.id)
+                if (user) await supabase.from('profiles').update({ preferred_activity: act.id }).eq('id', user.id)
+              }}
+              className={`flex-1 py-3 px-2 rounded-lg flex flex-col items-center justify-center gap-1 transition-all border-2 ${isSelected ? 'border-current' : 'border-transparent opacity-50 hover:opacity-75'}`} 
+              style={isSelected ? { backgroundColor: `${act.color}25`, borderColor: act.color, color: act.color } : {}}
+            >
+              <span className="text-2xl">{act.emoji}</span>
+              <span className={`text-xs font-semibold ${isSelected ? '' : 'text-slate-400'}`}>{act.name}</span>
+            </button>
+          )
+        })}
       </div>
 
       {/* Weather */}
