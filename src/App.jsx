@@ -713,7 +713,7 @@ function HomePage() {
       </div>
 
       {/* Activity Pills - Toggleable */}
-      <div className="flex gap-2 bg-slate-800/50 rounded-xl p-1.5">
+      <div className="flex gap-2 bg-slate-800/50 rounded-xl p-2">
         {Object.values(ACTIVITIES).map(act => {
           const isSelected = selectedActivity === act.id
           return (
@@ -723,11 +723,14 @@ function HomePage() {
                 setSelectedActivity(act.id)
                 if (user) await supabase.from('profiles').update({ preferred_activity: act.id }).eq('id', user.id)
               }}
-              className={`flex-1 py-3 px-2 rounded-lg flex flex-col items-center justify-center gap-1 transition-all border-2 ${isSelected ? 'border-current' : 'border-transparent opacity-50 hover:opacity-75'}`} 
-              style={isSelected ? { backgroundColor: `${act.color}25`, borderColor: act.color, color: act.color } : {}}
+              className="flex-1 py-3 px-2 rounded-xl flex flex-col items-center justify-center gap-1 transition-all"
+              style={{ 
+                backgroundColor: isSelected ? `${act.color}` : 'transparent',
+                opacity: isSelected ? 1 : 0.4
+              }}
             >
               <span className="text-2xl">{act.emoji}</span>
-              <span className={`text-xs font-semibold ${isSelected ? '' : 'text-slate-400'}`}>{act.name}</span>
+              <span className={`text-xs font-bold ${isSelected ? 'text-white' : 'text-slate-400'}`}>{act.name}</span>
             </button>
           )
         })}
@@ -739,7 +742,7 @@ function HomePage() {
       {/* Start Button */}
       <button onClick={() => setCurrentPage('ride')} className={`w-full bg-gradient-to-r ${activity?.gradient} text-white font-bold py-6 rounded-2xl shadow-lg flex items-center justify-center gap-3`} style={{ boxShadow: `0 10px 40px ${activity?.color}40` }}>
         <Play className="w-8 h-8" fill="currentColor" />
-        <span className="text-xl">Start {activity?.name}</span>
+        <span className="text-xl">Start Your Adventure</span>
       </button>
 
       {/* Route Suggestions */}
@@ -753,7 +756,11 @@ function HomePage() {
         </div>
         <div className="space-y-2">
           {suggestedRoutes.slice(0,2).map(route => (
-            <div key={route.id} className={`bg-slate-800 rounded-xl p-3 flex items-center gap-3 ${!route.unlocked ? 'opacity-50' : ''}`}>
+            <button 
+              key={route.id} 
+              onClick={() => route.unlocked && setCurrentPage('routes')}
+              className={`w-full bg-slate-800 rounded-xl p-3 flex items-center gap-3 text-left transition-all ${!route.unlocked ? 'opacity-50 cursor-not-allowed' : 'hover:bg-slate-700 cursor-pointer'}`}
+            >
               <div className="w-10 h-10 rounded-lg flex items-center justify-center text-lg" style={{ backgroundColor: DIFFICULTY[route.difficulty]?.color + '20' }}>
                 {DIFFICULTY[route.difficulty]?.icon}
               </div>
@@ -765,7 +772,7 @@ function HomePage() {
                 <div className="text-xs text-slate-400">{route.duration}min • {route.distance}km</div>
               </div>
               <ChevronRight className="w-5 h-5 text-slate-500" />
-            </div>
+            </button>
           ))}
         </div>
       </div>
@@ -790,11 +797,11 @@ function HomePage() {
       <div onClick={() => setCurrentPage('territory')} className="rounded-2xl p-4 border cursor-pointer" style={{ backgroundColor: `${activity?.color}10`, borderColor: `${activity?.color}30` }}>
         <div className="flex justify-between items-start">
           <div>
-            <h2 className="text-sm font-semibold" style={{ color: activity?.color }}>{activity?.name} Territory</h2>
+            <h2 className="text-sm font-semibold" style={{ color: activity?.color }}>My {activity?.name} Territory</h2>
             <div className="text-4xl font-bold text-white">{actTiles.length}</div>
-            <div className="text-sm text-slate-400">tiles owned</div>
+            <div className="text-sm text-slate-400">tiles conquered</div>
           </div>
-          <Trophy className="w-8 h-8" style={{ color: activity?.color }} />
+          <div className="text-4xl">{activity?.emoji}</div>
         </div>
       </div>
 
