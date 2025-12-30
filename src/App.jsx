@@ -1329,7 +1329,6 @@ function RecordingPage() {
         if (challenge.isActive) {
           setTrackChallenge(challenge)
         }
-        }
       } catch {}
     }
   }, [])
