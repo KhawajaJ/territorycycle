@@ -206,157 +206,115 @@ export default function App() {
         const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${pos.coords.latitude}&longitude=${pos.coords.longitude}&current=temperature_2m,weather_code,wind_speed_10m`)
         const data = await res.json()
         if (data.current) {
-          const codes = { 0:'clear', 1:'clear', 2:'clouds', 3:'clouds', 51:'rain', 61:'rain', 63:'rain' }
+          const codes = { 0:'clear', 1:'clear', 2:'clouds', 3:'clouds', 45:'fog', 48:'fog', 51:'rain', 53:'rain', 55:'rain', 61:'rain', 63:'rain', 65:'rain', 71:'snow', 73:'snow', 75:'snow', 80:'rain', 81:'rain', 95:'storm' }
           setWeather({ temp: Math.round(data.current.temperature_2m), condition: codes[data.current.weather_code]||'clear', wind: Math.round(data.current.wind_speed_10m) })
         }
       } catch {}
-    }, () => {})
+    }, () => {}, { enableHighAccuracy: true, timeout: 10000 })
   }, [])
 
-  // Generate smart territory-maximizing routes
+  // Generate simple suggested routes based on distance/direction
   useEffect(() => {
     if (!selectedActivity || !userLocation) return
     
-    const generateSmartRoutes = async () => {
-      const act = ACTIVITIES[selectedActivity]
-      const ownedTiles = tiles.filter(t => t.activity_type === selectedActivity)
-      const ownedH3 = new Set(ownedTiles.map(t => t.h3_index))
+    const act = ACTIVITIES[selectedActivity]
+    const ownedTiles = tiles.filter(t => t.activity_type === selectedActivity)
+    
+    // Simple direction calculation - find where user has LEAST tiles
+    const getPointAtDistance = (bearing, distanceKm) => {
+      const R = 6371
+      const lat1 = userLocation.lat * Math.PI / 180
+      const lng1 = userLocation.lng * Math.PI / 180
+      const brng = bearing * Math.PI / 180
+      const d = distanceKm / R
       
-      // Get cells around user's location
-      const userCell = latLngToCell(userLocation.lat, userLocation.lng, CONFIG.H3_RESOLUTION)
+      const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(brng))
+      const lng2 = lng1 + Math.atan2(Math.sin(brng) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2))
       
-      // Find unclaimed cells in expanding rings around user
-      const findUnclaimedDirection = (bearing, distanceKm) => {
-        const R = 6371 // Earth radius in km
-        const lat1 = userLocation.lat * Math.PI / 180
-        const lng1 = userLocation.lng * Math.PI / 180
-        const brng = bearing * Math.PI / 180
-        const d = distanceKm / R
-        
-        const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(brng))
-        const lng2 = lng1 + Math.atan2(Math.sin(brng) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2))
-        
-        return {
-          lat: lat2 * 180 / Math.PI,
-          lng: lng2 * 180 / Math.PI
-        }
+      return { lat: lat2 * 180 / Math.PI, lng: lng2 * 180 / Math.PI }
+    }
+
+    // Analyze 8 directions for unclaimed territory
+    const directions = []
+    const dirNames = ['North', 'Northeast', 'East', 'Southeast', 'South', 'Southwest', 'West', 'Northwest']
+    
+    for (let i = 0; i < 8; i++) {
+      const bearing = i * 45
+      let score = 0
+      
+      // Sample points at 0.5km, 1km, 2km, 3km
+      for (const dist of [0.5, 1, 2, 3]) {
+        const pt = getPointAtDistance(bearing, dist)
+        const cell = latLngToCell(pt.lat, pt.lng, CONFIG.H3_RESOLUTION)
+        if (!ownedTiles.find(t => t.h3_index === cell)) score++
       }
       
-      // Count unclaimed tiles along a route direction
-      const countUnclaimedInDirection = (bearing, distanceKm, samples = 10) => {
-        let unclaimed = 0
-        for (let i = 1; i <= samples; i++) {
-          const point = findUnclaimedDirection(bearing, (distanceKm / samples) * i)
-          const cell = latLngToCell(point.lat, point.lng, CONFIG.H3_RESOLUTION)
-          if (!ownedH3.has(cell)) unclaimed++
-        }
-        return unclaimed
-      }
-      
-      // Analyze 8 directions and find best ones
-      const directions = []
-      for (let bearing = 0; bearing < 360; bearing += 45) {
-        const unclaimed2km = countUnclaimedInDirection(bearing, 2)
-        const unclaimed5km = countUnclaimedInDirection(bearing, 5)
-        const unclaimed10km = countUnclaimedInDirection(bearing, 10)
-        directions.push({
-          bearing,
-          name: ['North', 'Northeast', 'East', 'Southeast', 'South', 'Southwest', 'West', 'Northwest'][bearing / 45],
-          unclaimed2km,
-          unclaimed5km,
-          unclaimed10km,
-          score: unclaimed2km * 3 + unclaimed5km * 2 + unclaimed10km
-        })
-      }
-      
-      // Sort by score (most unclaimed tiles)
-      directions.sort((a, b) => b.score - a.score)
-      const bestDir = directions[0]
-      const secondDir = directions[1]
-      
-      // Weather adjustments
-      let mult = 1
-      if (weather?.condition === 'rain') mult *= 0.7
-      if (weather?.wind > 20) mult *= 0.9
-      
-      // Generate waypoints for the best route
-      const generateWaypoints = (bearing, distanceKm) => {
-        const waypoints = []
-        const midpoint = findUnclaimedDirection(bearing, distanceKm / 2)
-        const endpoint = findUnclaimedDirection(bearing, distanceKm)
-        
-        // Create a loop: start -> midpoint offset -> endpoint -> return
-        const perpBearing = (bearing + 90) % 360
-        const loopOffset = findUnclaimedDirection(perpBearing, distanceKm * 0.2)
-        
-        waypoints.push(userLocation) // Start
-        waypoints.push({ lat: midpoint.lat + (loopOffset.lat - userLocation.lat) * 0.5, lng: midpoint.lng + (loopOffset.lng - userLocation.lng) * 0.5 })
-        waypoints.push(endpoint) // Far point
-        waypoints.push({ lat: midpoint.lat - (loopOffset.lat - userLocation.lat) * 0.5, lng: midpoint.lng - (loopOffset.lng - userLocation.lng) * 0.5 })
-        waypoints.push(userLocation) // Return
-        
-        return waypoints
-      }
-      
-      const baseDistance = act.avgSpeed * 0.5 * mult
-      
-      setSuggestedRoutes([
-        { 
-          id: 'quick', 
-          name: 'Quick Expansion', 
-          duration: 20, 
-          distance: (baseDistance * 0.4).toFixed(1), 
-          difficulty: 'easy', 
-          estimatedTiles: Math.max(5, bestDir.unclaimed2km),
-          direction: bestDir.name,
-          bearing: bestDir.bearing,
-          waypoints: generateWaypoints(bestDir.bearing, baseDistance * 0.4),
-          unlocked: true,
-          description: `Head ${bestDir.name.toLowerCase()} to claim ~${bestDir.unclaimed2km} new tiles`
-        },
-        { 
-          id: 'standard', 
-          name: 'Territory Raid', 
-          duration: 45, 
-          distance: baseDistance.toFixed(1), 
-          difficulty: ownedTiles.length > 50 ? 'moderate' : 'easy', 
-          estimatedTiles: Math.max(15, bestDir.unclaimed5km + 5),
-          direction: bestDir.name,
-          bearing: bestDir.bearing,
-          waypoints: generateWaypoints(bestDir.bearing, baseDistance),
-          unlocked: true,
-          description: `Expand ${bestDir.name.toLowerCase()} through unclaimed territory`
-        },
-        { 
-          id: 'explorer', 
-          name: 'New Frontier', 
-          duration: 60, 
-          distance: (baseDistance * 1.5).toFixed(1), 
-          difficulty: 'moderate', 
-          estimatedTiles: Math.max(20, secondDir.unclaimed5km + 10),
-          direction: secondDir.name,
-          bearing: secondDir.bearing,
-          waypoints: generateWaypoints(secondDir.bearing, baseDistance * 1.5),
-          unlocked: ownedTiles.length >= 10,
-          description: `Explore ${secondDir.name.toLowerCase()} - lots of unclaimed area!`
-        },
-        { 
-          id: 'conquest', 
-          name: 'Grand Conquest', 
-          duration: 90, 
-          distance: (baseDistance * 2).toFixed(1), 
-          difficulty: 'hard', 
-          estimatedTiles: Math.max(30, bestDir.unclaimed10km + 15),
-          direction: bestDir.name,
-          bearing: bestDir.bearing,
-          waypoints: generateWaypoints(bestDir.bearing, baseDistance * 2),
-          unlocked: ownedTiles.length >= 25,
-          description: `Major expansion ${bestDir.name.toLowerCase()} - claim maximum territory!`
-        },
-      ])
+      directions.push({ bearing, name: dirNames[i], score })
     }
     
-    generateSmartRoutes()
+    directions.sort((a, b) => b.score - a.score)
+    const best = directions[0]
+    const second = directions[1]
+    
+    // Weather adjustments
+    let mult = 1
+    if (weather?.condition === 'rain' || weather?.condition === 'storm') mult *= 0.6
+    else if (weather?.condition === 'snow') mult *= 0.5
+    if (weather?.wind > 25) mult *= 0.8
+    
+    const baseSpeed = act.avgSpeed // km/h
+    
+    // Generate simple routes
+    setSuggestedRoutes([
+      { 
+        id: 'quick', 
+        name: 'Quick Explore', 
+        duration: 15, 
+        distance: (baseSpeed * 0.25 * mult).toFixed(1), 
+        difficulty: 'easy', 
+        estimatedTiles: Math.max(3, Math.round(best.score * 0.5)),
+        direction: best.name,
+        bearing: best.bearing,
+        unlocked: true,
+        description: `Short ${best.name.toLowerCase()} trip for new tiles`
+      },
+      { 
+        id: 'standard', 
+        name: 'Territory Raid', 
+        duration: 30, 
+        distance: (baseSpeed * 0.5 * mult).toFixed(1), 
+        difficulty: 'easy', 
+        estimatedTiles: Math.max(8, Math.round(best.score * 1.5)),
+        direction: best.name,
+        bearing: best.bearing,
+        unlocked: true,
+        description: `Expand ${best.name.toLowerCase()} - good tile potential`
+      },
+      { 
+        id: 'explorer', 
+        name: 'New Frontier', 
+        duration: 45, 
+        distance: (baseSpeed * 0.75 * mult).toFixed(1), 
+        difficulty: 'moderate', 
+        estimatedTiles: Math.max(15, Math.round(second.score * 2)),
+        direction: second.name,
+        bearing: second.bearing,
+        unlocked: ownedTiles.length >= 5,
+        description: `Explore ${second.name.toLowerCase()} territory`
+      },
+      { 
+        id: 'conquest', 
+        name: 'Grand Conquest', 
+        duration: 60, 
+        distance: (baseSpeed * 1.0 * mult).toFixed(1), 
+        difficulty: 'hard', 
+        estimatedTiles: Math.max(25, Math.round(best.score * 3)),
+        direction: best.name,
+        bearing: best.bearing,
+        unlocked: ownedTiles.length >= 15,
+        description: `Major expansion - maximize new territory!`
+      },
+    ])
   }, [selectedActivity, tiles, weather, userLocation])
 
   // Auth listener
@@ -804,7 +762,7 @@ function MainApp() {
 
 // ============== HOME PAGE ==============
 function HomePage() {
-  const { profile, rides, tiles, setCurrentPage, streak, clan, selectedActivity, weather, suggestedRoutes, activity } = useApp()
+  const { user, profile, rides, tiles, setCurrentPage, streak, clan, selectedActivity, setSelectedActivity, weather, suggestedRoutes, activity, userLocation } = useApp()
   
   const actTiles = tiles.filter(t => t.activity_type === selectedActivity)
   const weekly = useMemo(() => {
@@ -1055,29 +1013,18 @@ function RoutesPage() {
                 </div>
               </div>
               {route.unlocked ? (
-                <div className="flex gap-2 mt-4">
-                  <button 
-                    onClick={() => {
-                      localStorage.setItem('activeRoute', JSON.stringify(route))
-                      setCurrentPage('routePreview')
-                    }} 
-                    className="flex-1 bg-slate-700 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2"
-                  >
-                    <MapPin className="w-4 h-4" /> Preview
-                  </button>
-                  <button 
-                    onClick={() => {
-                      localStorage.setItem('activeRoute', JSON.stringify(route))
-                      setCurrentPage('ride')
-                    }} 
-                    className={`flex-1 bg-gradient-to-r ${activity?.gradient} text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2`}
-                  >
-                    <Play className="w-4 h-4" /> Start
-                  </button>
-                </div>
+                <button 
+                  onClick={() => {
+                    localStorage.setItem('activeRoute', JSON.stringify(route))
+                    setCurrentPage('ride')
+                  }} 
+                  className={`w-full mt-4 bg-gradient-to-r ${activity?.gradient} text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2`}
+                >
+                  <Play className="w-5 h-5" /> Start {route.name}
+                </button>
               ) : (
                 <div className="mt-4 bg-slate-700/50 rounded-xl p-3 text-center text-sm text-slate-400">
-                  🔒 Own {route.id === 'conquest' ? 25 : 10}+ tiles to unlock
+                  🔒 Own {route.id === 'conquest' ? 15 : 5}+ tiles to unlock
                 </div>
               )}
             </div>
@@ -2006,9 +1953,72 @@ function ProfilePage() {
 function SettingsPage() {
   const { user, profile, setProfile, setCurrentPage, addToast, selectedActivity, setSelectedActivity, activity } = useApp()
   const [avatar, setAvatar] = useState({ background: profile?.avatar_background || '#06b6d4', icon: profile?.avatar_icon || '🚴' })
+  const [avatarUrl, setAvatarUrl] = useState(profile?.avatar_url || null)
   const [customEmoji, setCustomEmoji] = useState('')
   const [showCustom, setShowCustom] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef(null)
+
+  const handlePhotoUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    
+    // Check file size (max 2MB)
+    if (file.size > 2 * 1024 * 1024) {
+      addToast('Photo must be under 2MB', 'error')
+      return
+    }
+    
+    // Check file type
+    if (!file.type.startsWith('image/')) {
+      addToast('Please select an image file', 'error')
+      return
+    }
+    
+    setUploading(true)
+    try {
+      // Create a unique filename
+      const fileExt = file.name.split('.').pop()
+      const fileName = `${user.id}-${Date.now()}.${fileExt}`
+      
+      // Upload to Supabase Storage
+      const { data, error } = await supabase.storage
+        .from('avatars')
+        .upload(fileName, file, { upsert: true })
+      
+      if (error) throw error
+      
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(fileName)
+      
+      setAvatarUrl(publicUrl)
+      
+      // Save to profile
+      await supabase.from('profiles').update({
+        avatar_url: publicUrl,
+        updated_at: new Date().toISOString()
+      }).eq('id', user.id)
+      
+      addToast('Photo uploaded!', 'success')
+    } catch (err) {
+      console.error('Upload error:', err)
+      addToast('Failed to upload photo', 'error')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const removePhoto = async () => {
+    setAvatarUrl(null)
+    await supabase.from('profiles').update({
+      avatar_url: null,
+      updated_at: new Date().toISOString()
+    }).eq('id', user.id)
+    addToast('Photo removed', 'info')
+  }
 
   const saveAvatar = async () => {
     setSaving(true)
@@ -2041,12 +2051,65 @@ function SettingsPage() {
       </div>
 
       <div className="p-4 space-y-6">
-        {/* Avatar Section */}
+        {/* Photo Upload Section */}
         <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
           <h2 className="font-semibold text-white mb-4 flex items-center gap-2">
             <Camera className="w-5 h-5" style={{ color: activity?.color }} />
-            Edit Avatar
+            Profile Photo
           </h2>
+          
+          <div className="flex flex-col items-center gap-4">
+            {avatarUrl ? (
+              <div className="relative">
+                <img 
+                  src={avatarUrl} 
+                  alt="Profile" 
+                  className="w-24 h-24 rounded-full object-cover border-4"
+                  style={{ borderColor: activity?.color }}
+                />
+                <button 
+                  onClick={removePhoto}
+                  className="absolute -top-1 -right-1 bg-red-500 rounded-full p-1"
+                >
+                  <X className="w-4 h-4 text-white" />
+                </button>
+              </div>
+            ) : (
+              <div 
+                className="w-24 h-24 rounded-full flex items-center justify-center border-2 border-dashed border-slate-600"
+                style={{ backgroundColor: avatar.background + '30' }}
+              >
+                <Camera className="w-8 h-8 text-slate-500" />
+              </div>
+            )}
+            
+            <input 
+              ref={fileInputRef}
+              type="file" 
+              accept="image/*"
+              onChange={handlePhotoUpload}
+              className="hidden"
+            />
+            
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="bg-slate-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50"
+            >
+              {uploading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Camera className="w-4 h-4" />
+              )}
+              {avatarUrl ? 'Change Photo' : 'Upload Photo'}
+            </button>
+            <p className="text-xs text-slate-500">Max 2MB • JPG, PNG, GIF</p>
+          </div>
+        </div>
+
+        {/* Emoji Avatar Section */}
+        <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+          <h2 className="font-semibold text-white mb-4">Emoji Avatar (shown if no photo)</h2>
           
           <div className="flex justify-center mb-4">
             <AvatarDisplay avatar={avatar} size="xl" />
